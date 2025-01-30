@@ -231,9 +231,9 @@ if(PSP_WASM_BUILD)
             ")
         endif()
     else()
-        set(OPT_FLAGS " -O3 -g0 ")
+        set(OPT_FLAGS " -O0 -g3 ")
         if (PSP_WASM_EXCEPTIONS)
-            set(OPT_FLAGS "${OPT_FLAGS} -fwasm-exceptions -flto --emit-tsd=perspective-server.d.ts ")
+            set(OPT_FLAGS "${OPT_FLAGS} -fwasm-exceptions --emit-tsd=perspective-server.d.ts ")
         endif()
     endif()
 elseif(PSP_CPP_BUILD OR PSP_PYTHON_BUILD)
@@ -273,9 +273,9 @@ elseif(PSP_CPP_BUILD OR PSP_PYTHON_BUILD)
             endif ()
         else()
             set(OPT_FLAGS " \
-                -O3 \
+                -O0 \
                 -fexceptions \
-                -g1 \
+                -g3 \
                 ")
             if (PSP_WASM_EXCEPTIONS)
                 set(OPT_FLAGS "${OPT_FLAGS} -fwasm-exceptions ")
@@ -300,17 +300,24 @@ endif()
 
 if (PSP_WASM_EXCEPTIONS)
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} \
-        -O3 \
-        -g0 \
+        -O0 \
+        -g3 \
+        -gsplit-dwarf \
+        -gseparate-dwarf \
     ")
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} \
         -fwasm-exceptions \
-        -O3 \
-        -g0 \
+        -O0 \
+        -g3 \
+        -gsplit-dwarf \
+        -gseparate-dwarf \
     ")
 else()
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} \
-    -O3 \
+    -O0 \
+    -g3 \
+    -gsplit-dwarf \
+    -gseparate-dwarf \
     ")
 endif()
 
@@ -487,6 +494,7 @@ set(SOURCE_FILES
     ${PSP_CPP_SRC}/src/cpp/arrow_csv.cpp
     ${PSP_CPP_SRC}/src/cpp/server.cpp
     ${PSP_CPP_SRC}/src/cpp/binding_api.cpp
+    ${PSP_CPP_SRC}/src/cpp/heap_instruments.cpp
 )
 
 set(PYTHON_SOURCE_FILES ${SOURCE_FILES})
@@ -528,7 +536,10 @@ else()
         -s NODEJS_CATCH_REJECTION=0 \
         -s USE_ES6_IMPORT_META=1 \
         -s EXPORT_ES6=1 \
-        -s EXPORTED_FUNCTIONS=_psp_poll,_psp_new_server,_psp_free,_psp_alloc,_psp_handle_request,_psp_new_session,_psp_close_session,_psp_delete_server,_psp_is_memory64 \
+        -s EXPORTED_FUNCTIONS=_psp_poll,_psp_new_server,_psp_free,_psp_alloc,_psp_handle_request,_psp_new_session,_psp_close_session,_psp_delete_server,_psp_is_memory64,_psp_print_used_memory,_psp_dump_stack_traces,_psp_clear_stack_traces \
+        -g3 \
+        -gsplit-dwarf \
+        -gseparate-dwarf \
     ")
 
     if(PSP_WASM64)

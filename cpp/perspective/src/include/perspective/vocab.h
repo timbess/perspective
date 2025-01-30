@@ -25,12 +25,11 @@
 namespace perspective {
 
 class PERSPECTIVE_EXPORT t_vocab {
-    typedef tsl::hopscotch_map<
+    using t_sidxmap = tsl::hopscotch_map<
         const char*,
         t_uindex,
         t_cchar_umap_hash,
-        t_cchar_umap_cmp>
-        t_sidxmap;
+        t_cchar_umap_cmp>;
 
 public:
     t_vocab();

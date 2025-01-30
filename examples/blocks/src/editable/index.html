@@ -14,8 +14,11 @@
             import perspective from "/node_modules/@finos/perspective/dist/cdn/perspective.js";
 
             const worker = await perspective.worker();
-            const resp = await fetch("/node_modules/superstore-arrow/superstore.lz4.arrow");
+            // const resp = await fetch("/node_modules/superstore-arrow/superstore.lz4.arrow");
+            const resp = await fetch("/examples/blocks/src/editable/customers-500000.arrow");
             const arrow = await resp.arrayBuffer();
+            // const resp = await fetch("/examples/blocks/src/editable/customers-500000.csv");
+            // const arrow = await resp.text();
             const viewer = document.getElementsByTagName("perspective-viewer")[0];
             const table = worker.table(arrow);
             viewer.load(table);

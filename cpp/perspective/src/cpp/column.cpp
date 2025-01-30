@@ -727,6 +727,7 @@ t_column::append(const t_column& other) {
 
             set_size(other.size());
             m_vocab->rebuild_map();
+            // ^ Allocates third most memory.
         } else {
             for (t_uindex idx = 0, loop_end = other.size(); idx < loop_end;
                  ++idx) {

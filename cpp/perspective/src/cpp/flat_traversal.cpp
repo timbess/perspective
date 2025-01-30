@@ -10,6 +10,7 @@
 // ┃ of the [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0). ┃
 // ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
 
+#include "perspective/raw_types.h"
 #include <perspective/first.h>
 #include <perspective/base.h>
 #include <perspective/config.h>
@@ -118,7 +119,7 @@ t_ftrav::fill_sort_elem(
 
         const std::string& sortby_colname = config.get_sort_by(colname);
 
-        out_elem.m_row.push_back(
+        out_elem.m_row.emplace_back(
             m_symtable.get_interned_tscalar(get_from_gstate(
                 gstate, expression_master_table, sortby_colname, pkey
             ))
@@ -280,66 +281,81 @@ t_ftrav::step_begin() {
 void
 t_ftrav::step_end() {
     // The new number of rows in this traversal
-    t_index new_size = m_index->size() + m_step_inserts - m_step_deletes;
-
-    auto new_index = std::make_shared<std::vector<t_mselem>>();
-    new_index->reserve(new_size);
+    t_index new_size =
+        static_cast<t_index>(m_index->size()) + m_step_inserts - m_step_deletes;
 
     t_uindex i = 0;
     t_multisorter sorter(get_sort_orders(m_sortby));
 
-    std::vector<t_mselem> new_rows;
-    new_rows.reserve(m_new_elems.size());
+    if (m_sortby.empty()) {
+        // if (false) {
+        // Add new rows in place rather tha replacing the whole index
+        for (const auto& [_, elem] : m_new_elems) {
+            m_index->push_back(elem);
+            m_pkeyidx[elem.m_pkey] = m_index->size();
+        }
 
-    for (tsl::hopscotch_map<t_tscalar, t_mselem>::const_iterator pkelem_iter =
-             m_new_elems.begin();
-         pkelem_iter != m_new_elems.end();
-         ++pkelem_iter) {
-        new_rows.push_back(pkelem_iter->second);
-    }
+        std::sort(m_index->begin(), m_index->end(), sorter);
+    } else {
 
-    // TODO: int/float/date/datetime pkeys are already sorted here, so if
-    // there was a way to assert that `psp_pkey` is a string typed column,
-    // we can conditional the sort on whether m_sortby.size() > 0 or if
-    // psp_pkey is a string column.
-    std::sort(new_rows.begin(), new_rows.end(), sorter);
+        auto new_index = std::make_shared<std::vector<t_mselem>>();
+        new_index->reserve(new_size);
 
-    for (auto& new_elem : new_rows) {
+        std::vector<t_mselem> new_rows;
+        new_rows.reserve(m_new_elems.size());
+
+        // ^ Allocates sizeof(t_mselem) (40 bytes) * num_rows upon view creation
+
+        for (tsl::hopscotch_map<t_tscalar, t_mselem>::const_iterator
+                 pkelem_iter = m_new_elems.begin();
+             pkelem_iter != m_new_elems.end();
+             ++pkelem_iter) {
+            new_rows.push_back(pkelem_iter->second);
+        }
+
+        // TODO: int/float/date/datetime pkeys are already sorted here, so if
+        // there was a way to assert that `psp_pkey` is a string typed column,
+        // we can conditional the sort on whether m_sortby.size() > 0 or if
+        // psp_pkey is a string column.
+        std::sort(new_rows.begin(), new_rows.end(), sorter);
+
+        for (auto& new_elem : new_rows) {
+            while (i < m_index->size()) {
+                const t_mselem& old_elem = (*m_index)[i];
+
+                if (old_elem.m_deleted) {
+                    i++;
+                    m_pkeyidx.erase(old_elem.m_pkey);
+                } else if (old_elem.m_updated) {
+                    i++;
+                } else if (sorter(old_elem, new_elem)) {
+                    m_pkeyidx[old_elem.m_pkey] = new_index->size();
+                    new_index->push_back(old_elem);
+                    i++;
+                } else {
+                    break;
+                }
+            }
+
+            m_pkeyidx[new_elem.m_pkey] = new_index->size();
+            new_index->push_back(new_elem);
+        }
+
+        // reconcile old rows that are marked as removed or updated.
         while (i < m_index->size()) {
-            const t_mselem& old_elem = (*m_index)[i];
+            const t_mselem& old_elem = (*m_index)[i++];
 
             if (old_elem.m_deleted) {
-                i++;
                 m_pkeyidx.erase(old_elem.m_pkey);
-            } else if (old_elem.m_updated) {
-                i++;
-            } else if (sorter(old_elem, new_elem)) {
+            } else if (!old_elem.m_updated) {
+                // Add back cells that have not changed during this step.
                 m_pkeyidx[old_elem.m_pkey] = new_index->size();
                 new_index->push_back(old_elem);
-                i++;
-            } else {
-                break;
             }
         }
 
-        m_pkeyidx[new_elem.m_pkey] = new_index->size();
-        new_index->push_back(new_elem);
+        std::swap(new_index, m_index);
     }
-
-    // reconcile old rows that are marked as removed or updated.
-    while (i < m_index->size()) {
-        const t_mselem& old_elem = (*m_index)[i++];
-
-        if (old_elem.m_deleted) {
-            m_pkeyidx.erase(old_elem.m_pkey);
-        } else if (!old_elem.m_updated) {
-            // Add back cells that have not changed during this step.
-            m_pkeyidx[old_elem.m_pkey] = new_index->size();
-            new_index->push_back(old_elem);
-        }
-    }
-
-    std::swap(new_index, m_index);
     m_new_elems.clear();
 }
 
@@ -352,7 +368,8 @@ t_ftrav::add_row(
 ) {
     t_mselem mselem;
     fill_sort_elem(gstate, expression_master_table, config, pkey, mselem);
-    m_new_elems[pkey] = mselem;
+    // m_new_elems[pkey] = mselem;
+    m_new_elems.emplace(pkey, mselem);
     ++m_step_inserts;
 }
 
@@ -374,7 +391,7 @@ t_ftrav::update_row(
     t_mselem mselem;
     fill_sort_elem(gstate, expression_master_table, config, pkey, mselem);
     (*m_index)[pkiter->second].m_updated = true;
-    m_new_elems[pkey] = mselem;
+    m_new_elems.emplace(pkey, mselem);
 }
 
 void

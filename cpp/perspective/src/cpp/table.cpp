@@ -1671,7 +1671,7 @@ Table::update_arrow(const std::string_view& data, std::uint32_t port_id) {
 
 std::shared_ptr<Table>
 Table::from_arrow(
-    const std::string& index, const std::string_view& data, std::uint32_t limit
+    const std::string& index, std::string&& data, std::uint32_t limit
 ) {
     apachearrow::ArrowLoader arrow_loader;
 
@@ -1698,18 +1698,24 @@ Table::from_arrow(
     }
 
     t_schema output_schema{columns, types};
-    t_data_table data_table{output_schema};
-    data_table.init();
+    // t_data_table data_table{output_schema};
+    auto data_table = std::make_unique<t_data_table>(output_schema);
+    data_table->init();
 
-    auto row_count = arrow_loader.row_count();
-    data_table.extend(row_count);
-    arrow_loader.fill_table(data_table, input_schema, index, 0, limit, false);
+    {
+        auto _ = std::move(data);
+        auto loader = std::move(arrow_loader);
+        auto row_count = loader.row_count();
+        data_table->extend(row_count);
+        loader.fill_table(*data_table, input_schema, index, 0, limit, false);
+    }
 
     // Make Table
     auto pool = std::make_shared<t_pool>();
     pool->init();
     auto table = std::make_shared<Table>(pool, columns, types, limit, index);
-    table->init(data_table, data_table.num_rows(), t_op::OP_INSERT, 0);
+    table->init(*data_table, data_table->num_rows(), t_op::OP_INSERT, 0);
+    data_table.reset();
     pool->_process();
     return table;
 }

@@ -21,6 +21,7 @@ self.addEventListener("message", async (msg) => {
         const id = msg.data.id;
         const module = await compile_perspective(msg.data.args[0]);
         server = new PerspectiveServer(module);
+        (self as any).server = server;
         session = server.make_session(async (resp) => {
             const f = resp.slice().buffer;
             self.postMessage(f, { transfer: [f] });

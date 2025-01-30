@@ -12,9 +12,11 @@
 
 #include "perspective/exports.h"
 #include "perspective/server.h"
+#include "perspective/heap_instruments.h"
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
+#include <emscripten/heap.h>
 #include <string>
 #include <tsl/hopscotch_map.h>
 
@@ -59,6 +61,9 @@ encode_api_responses(const std::vector<ProtoServerResp<std::string>>& msgs) {
     return encoded;
 }
 
+using MyString =
+    std::basic_string<char, std::char_traits<char>, UnderlyingAllocator<char>>;
+
 extern "C" {
 
 PERSPECTIVE_EXPORT
@@ -75,7 +80,7 @@ psp_handle_request(
     char* msg_ptr,
     std::size_t msg_len
 ) {
-    std::string msg(msg_ptr, msg_len);
+    MyString msg(msg_ptr, msg_len);
     auto msgs = server->handle_request(client_id, msg);
     return encode_api_responses(msgs);
 }
@@ -102,14 +107,15 @@ psp_close_session(ProtoServer* server, std::uint32_t client_id) {
 PERSPECTIVE_EXPORT
 std::size_t
 psp_alloc(std::size_t size) {
-    auto* mem = (char*)malloc(size);
+    // auto* mem = (char*)malloc(size);
+    auto* mem = (char*)emscripten_builtin_malloc(size);
     return (size_t)mem;
 }
 
 PERSPECTIVE_EXPORT
 void
 psp_free(void* ptr) {
-    free(ptr);
+    emscripten_builtin_free(ptr);
 }
 
 PERSPECTIVE_EXPORT

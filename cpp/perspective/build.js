@@ -61,7 +61,7 @@ try {
 
     execSync(`cpy web/**/* ../web`, { cwd, stdio });
     execSync(`cpy node/**/* ../node`, { cwd, stdio });
-    bootstrap(`../../cpp/perspective/dist/web/perspective-server.wasm`);
+    // bootstrap(`../../cpp/perspective/dist/web/perspective-server.wasm`);
 } catch (e) {
     console.error(e);
     process.exit(1);
