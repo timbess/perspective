@@ -74,6 +74,15 @@ pub fn build(b: *std.Build) void {
 
     const run_lib_unit_tests = b.addRunArtifact(lib_unit_tests);
 
+    // TODO: This shouldn't be necessary...
+    const column_tests = b.addTest(.{
+        .root_source_file = b.path("src/columns.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    const run_column_tests = b.addRunArtifact(column_tests);
+
     const exe_unit_tests = b.addTest(.{
         .root_source_file = b.path("src/main.zig"),
         .target = target,
@@ -88,4 +97,5 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_lib_unit_tests.step);
     test_step.dependOn(&run_exe_unit_tests.step);
+    test_step.dependOn(&run_column_tests.step);
 }
