@@ -13,24 +13,22 @@ pub const Table = struct {
     columns: std.ArrayListUnmanaged(Column),
     name_mapping: std.StringHashMapUnmanaged(Column),
     schema: Schema,
-    arena: std.heap.ArenaAllocator,
+    allocator: std.mem.Allocator,
 
-    fn init(parent_allocator: std.mem.Allocator, name: []const u8, schema: Schema) !Table {
-        var arena = std.heap.ArenaAllocator.init(parent_allocator);
-        var local_allocator = arena.allocator();
-        var cols = try std.ArrayListUnmanaged(Column).initCapacity(local_allocator, schema.fields.len);
+    fn init(allocator: std.mem.Allocator, name: []const u8, schema: Schema) !Table {
+        var cols = try std.ArrayListUnmanaged(Column).initCapacity(allocator, schema.fields.len);
         var name_mapping = std.StringHashMapUnmanaged(Column){};
-        try name_mapping.ensureTotalCapacity(local_allocator, @truncate(schema.fields.len));
+        try name_mapping.ensureTotalCapacity(allocator, @truncate(schema.fields.len));
         for (schema.fields) |field| {
             switch (field.dtype) {
                 inline else => |dtype| {
                     const ColType = dtype.coltype();
-                    var col: *ColType = try local_allocator.create(ColType);
+                    var col: *ColType = try allocator.create(ColType);
                     // Bypass local arena to let column's choose how to wrap the top level allocator.
-                    col.* = try ColType.init(parent_allocator, field.name);
+                    col.* = try ColType.init(allocator, field.name);
                     const erased = col.toColumn();
                     cols.appendAssumeCapacity(erased);
-                    try name_mapping.put(local_allocator, field.name, erased);
+                    try name_mapping.put(allocator, field.name, erased);
                 },
             }
         }
@@ -39,16 +37,26 @@ pub const Table = struct {
             .name = name,
             .columns = cols,
             .name_mapping = name_mapping,
-            .arena = arena,
             .schema = schema,
+            .allocator = allocator,
         };
     }
 
     fn deinit(self: *Table) void {
         for (self.columns.items) |*col| {
+            const ptr = col.ptr;
+            const dtype = col.dtype;
             col.deinit();
+            switch (dtype) {
+                inline else => |dt| {
+                    const ColType = dt.coltype();
+                    const col_ptr: *ColType = @ptrCast(@alignCast(ptr));
+                    self.allocator.destroy(col_ptr);
+                },
+            }
         }
-        self.arena.deinit();
+        self.columns.deinit(self.allocator);
+        self.name_mapping.deinit(self.allocator);
     }
 
     fn getColumn(self: *Table, name: []const u8) ?Column {
