@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const column = @import("columns.zig");
 const root = @import("root.zig");
 const Schema = root.Schema;
@@ -7,16 +8,24 @@ const Scalar = root.Scalar;
 const Table = @import("table.zig").Table;
 
 pub fn main() !void {
-    var allocator = std.heap.GeneralPurposeAllocator(.{}){};
-    defer {
-        std.debug.assert(!allocator.detectLeaks());
-        _ = allocator.deinit();
+    var allocator: std.mem.Allocator = undefined;
+
+    switch (builtin.mode) {
+        .Debug => {
+            allocator = std.heap.c_allocator;
+        },
+        else => {
+            var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+            allocator = gpa.allocator();
+            defer {
+                std.debug.assert(!gpa.detectLeaks());
+                _ = gpa.deinit();
+            }
+        },
     }
     const stdout_file = std.io.getStdOut().writer();
     var bw = std.io.bufferedWriter(stdout_file);
     const stdout = bw.writer();
-
-    stdout.print("Test");
 
     const schema = Schema{
         .fields = &[_]root.Field{
@@ -26,14 +35,29 @@ pub fn main() !void {
         },
     };
 
-    var table = try Table.init(std.testing.allocator, "test_table", schema);
+    var table = try Table.init(allocator, "test_table", schema);
     defer table.deinit();
 
-    table.appendRows([_]Scalar{
-        .{ .u32 = 42 },
-        .{ .f64 = 10.5 },
-        .{ .string = "hello" },
+    try table.appendRow(&[_]Scalar{
+        Scalar{ .u32 = 42 },
+        Scalar{ .f64 = 10.5 },
+        Scalar{ .string = "hello" },
     });
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const columns = try table.sliceRows(arena.allocator(), 0, 1);
+
+    for (columns) |*c| {
+        try stdout.print("Col: {s}\n", .{c.column_name});
+        for (0..c.data.len) |i| {
+            const scalar = c.data.get(i);
+            switch (scalar) {
+                .string => |s| try stdout.print("{s}", .{s}),
+                inline else => |s| try stdout.print("{any}\n", .{s}),
+            }
+        }
+    }
 
     try bw.flush();
 }
