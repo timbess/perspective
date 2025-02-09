@@ -109,21 +109,21 @@ pub const Table = struct {
                     const ColType = dtype.coltype();
                     const typed_col: *ColType = try col.reflect(dtype);
 
-                    r.data.len = typed_col.size();
+                    const col_size = typed_col.size();
 
+                    r.data.len = col_size;
                     var dst = r.data.slice().items(ScalarArray.Field.data);
-                    dst.len = typed_col.size();
+                    dst.len = col_size;
                     var tag_dst = r.data.slice().items(ScalarArray.Field.tags);
-                    tag_dst.len = typed_col.size();
+                    tag_dst.len = col_size;
 
                     const Bare = @typeInfo(@TypeOf(dst)).Pointer.child;
 
+                    // Has to be a loop because the contiguous int columns are smaller than the "Scalar" union
                     for (rstart..rend) |i| {
-                        // dst[i] = typed_col.data.items[i];
                         dst[i] = @unionInit(Bare, @tagName(dtype), typed_col.data.items[i]);
                     }
 
-                    // @memcpy(dst_ptr, src[rstart..rend]);
                     @memset(tag_dst.ptr[rstart..rend], dtype);
                 },
             }
@@ -164,7 +164,6 @@ test "table slices" {
     const slices = try table.sliceRows(arena.allocator(), 0, 3);
 
     const names = [_][]const u8{ "id", "value", "label" };
-    // const names = [_][]const u8{ "id", "value" };
 
     try std.testing.expect(slices.len == schema.fields.len);
     for (slices, names, 0..) |col, expected_name, coli| {
