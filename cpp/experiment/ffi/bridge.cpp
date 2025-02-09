@@ -134,3 +134,83 @@ FreeArrow(struct OpaqueArrow* out) {
     delete out;
 }
 }
+size_t
+TableColumns(struct OpaqueArrow* arrow) {
+    return arrow->table->num_columns();
+}
+
+size_t
+TableSize(struct OpaqueArrow* arrow) {
+    return arrow->table->num_rows();
+}
+
+void
+ReadColumns(struct OpaqueArrow* arrow, struct Field* out) {
+    const auto& table = arrow->table;
+    const auto& schema = table->schema();
+    for (auto i = 0; i < table->num_columns(); i++) {
+        const auto& field = schema->field(i);
+        enum dtype type;
+        switch (field->type()->id()) {
+            case arrow::Type::UINT32:
+                type = dtype::u32;
+                break;
+            case arrow::Type::UINT64:
+                type = dtype::u64;
+                break;
+            case arrow::Type::INT32:
+                type = dtype::i32;
+                break;
+            case arrow::Type::DOUBLE:
+                type = dtype::f64;
+                break;
+            case arrow::Type::STRING:
+                type = dtype::string;
+                break;
+            case arrow::Type::INT64:
+            case arrow::Type::NA:
+            case arrow::Type::BOOL:
+            case arrow::Type::UINT8:
+            case arrow::Type::INT8:
+            case arrow::Type::UINT16:
+            case arrow::Type::INT16:
+            case arrow::Type::HALF_FLOAT:
+            case arrow::Type::FLOAT:
+            case arrow::Type::BINARY:
+            case arrow::Type::FIXED_SIZE_BINARY:
+            case arrow::Type::DATE32:
+            case arrow::Type::DATE64:
+            case arrow::Type::TIMESTAMP:
+            case arrow::Type::TIME32:
+            case arrow::Type::TIME64:
+            case arrow::Type::INTERVAL_MONTHS:
+            case arrow::Type::INTERVAL_DAY_TIME:
+            case arrow::Type::DECIMAL128:
+            case arrow::Type::DECIMAL256:
+            case arrow::Type::LIST:
+            case arrow::Type::STRUCT:
+            case arrow::Type::SPARSE_UNION:
+            case arrow::Type::DENSE_UNION:
+            case arrow::Type::DICTIONARY:
+            case arrow::Type::MAP:
+            case arrow::Type::EXTENSION:
+            case arrow::Type::FIXED_SIZE_LIST:
+            case arrow::Type::DURATION:
+            case arrow::Type::LARGE_STRING:
+            case arrow::Type::LARGE_BINARY:
+            case arrow::Type::LARGE_LIST:
+            case arrow::Type::INTERVAL_MONTH_DAY_NANO:
+            case arrow::Type::RUN_END_ENCODED:
+            case arrow::Type::STRING_VIEW:
+            case arrow::Type::BINARY_VIEW:
+            case arrow::Type::LIST_VIEW:
+            case arrow::Type::LARGE_LIST_VIEW:
+            case arrow::Type::DECIMAL32:
+            case arrow::Type::DECIMAL64:
+            case arrow::Type::MAX_ID:
+                std::cerr << "Unsupported type: " << field->type()->ToString();
+                std::abort();
+        }
+        out[i] = Field{.name = field->name().c_str(), .dtype = type};
+    }
+}
