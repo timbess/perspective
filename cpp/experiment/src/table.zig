@@ -4,9 +4,16 @@ const Column = columns.Column;
 
 const root = @import("root.zig");
 const Dtype = root.Dtype;
+const PspError = root.PspError;
 
 pub const Schema = root.Schema;
 pub const Scalar = root.Scalar;
+
+const ScalarArray = std.MultiArrayList(Scalar);
+pub const ColumnSlice = struct {
+    column_name: []const u8,
+    data: ScalarArray,
+};
 
 pub const Table = struct {
     name: []const u8,
@@ -15,7 +22,7 @@ pub const Table = struct {
     schema: Schema,
     allocator: std.mem.Allocator,
 
-    fn init(allocator: std.mem.Allocator, name: []const u8, schema: Schema) !Table {
+    pub fn init(allocator: std.mem.Allocator, name: []const u8, schema: Schema) !Table {
         var cols = try std.ArrayListUnmanaged(Column).initCapacity(allocator, schema.fields.len);
         var name_mapping = std.StringHashMapUnmanaged(Column){};
         try name_mapping.ensureTotalCapacity(allocator, @truncate(schema.fields.len));
@@ -42,7 +49,7 @@ pub const Table = struct {
         };
     }
 
-    fn deinit(self: *Table) void {
+    pub fn deinit(self: *Table) void {
         for (self.columns.items) |*col| {
             const ptr = col.ptr;
             const dtype = col.dtype;
@@ -59,10 +66,123 @@ pub const Table = struct {
         self.name_mapping.deinit(self.allocator);
     }
 
-    fn getColumn(self: *Table, name: []const u8) ?Column {
+    pub fn getColumn(self: *Table, name: []const u8) ?Column {
         return self.name_mapping.get(name) orelse null;
     }
+
+    inline fn appendRowUnchecked(self: *Table, row: []const Scalar) !void {
+        for (self.columns.items, row) |*col, scalar| {
+            try col.append(scalar);
+        }
+    }
+
+    pub fn appendRow(self: *Table, row: []const Scalar) !void {
+        if (row.len != self.schema.fields.len) {
+            return PspError.InvalidColumnCount;
+        }
+        try self.appendRowUnchecked(row);
+    }
+
+    pub fn appendRows(self: *Table, rows: []const []const Scalar) !void {
+        for (rows) |row| {
+            try self.appendRow(row);
+        }
+    }
+
+    /// Slice rows from the table. Probably smart to use an Arena allocator here.
+    pub fn sliceRows(self: *Table, allocator: std.mem.Allocator, rstart: usize, rend: usize) ![]ColumnSlice {
+        if (rstart > rend or rend > self.size()) {
+            return error.InvalidArgument;
+        }
+        const row_count = rend - rstart;
+        const result: []ColumnSlice = try allocator.alloc(ColumnSlice, self.columns.items.len);
+        for (result, self.schema.fields) |*r, field| {
+            r.* = ColumnSlice{
+                .column_name = field.name,
+                .data = ScalarArray{},
+            };
+            try r.data.ensureTotalCapacity(allocator, row_count);
+        }
+        for (self.columns.items, result) |*col, *r| {
+            switch (col.dtype) {
+                inline else => |dtype| {
+                    const ColType = dtype.coltype();
+                    const typed_col: *ColType = try col.reflect(dtype);
+
+                    r.data.len = typed_col.size();
+
+                    var dst = r.data.slice().items(ScalarArray.Field.data);
+                    dst.len = typed_col.size();
+                    var tag_dst = r.data.slice().items(ScalarArray.Field.tags);
+                    tag_dst.len = typed_col.size();
+
+                    const Bare = @typeInfo(@TypeOf(dst)).Pointer.child;
+
+                    for (rstart..rend) |i| {
+                        // dst[i] = typed_col.data.items[i];
+                        dst[i] = @unionInit(Bare, @tagName(dtype), typed_col.data.items[i]);
+                    }
+
+                    // @memcpy(dst_ptr, src[rstart..rend]);
+                    @memset(tag_dst.ptr[rstart..rend], dtype);
+                },
+            }
+        }
+        return result;
+    }
+
+    pub fn size(self: *Table) usize {
+        if (self.columns.items.len == 0) return 0;
+        return self.columns.items[0].size();
+    }
 };
+
+test "table slices" {
+    const schema = Schema{
+        .fields = &[_]root.Field{
+            .{ .name = "id", .dtype = Dtype.u32 },
+            .{ .name = "value", .dtype = Dtype.f64 },
+            .{ .name = "label", .dtype = Dtype.string },
+        },
+    };
+
+    var table = try Table.init(std.testing.allocator, "test_table", schema);
+    defer table.deinit();
+
+    const rows: []const []const Scalar = &[_][]const Scalar{
+        &[_]Scalar{ .{ .u32 = 1 }, .{ .f64 = 1 }, .{ .string = "foo" } },
+        &[_]Scalar{ .{ .u32 = 2 }, .{ .f64 = 2 }, .{ .string = "bar" } },
+        &[_]Scalar{ .{ .u32 = 3 }, .{ .f64 = 3 }, .{ .string = "baz" } },
+    };
+
+    try table.appendRows(rows);
+
+    try std.testing.expectEqual(table.size(), 3);
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const slices = try table.sliceRows(arena.allocator(), 0, 3);
+
+    const names = [_][]const u8{ "id", "value", "label" };
+    // const names = [_][]const u8{ "id", "value" };
+
+    try std.testing.expect(slices.len == schema.fields.len);
+    for (slices, names, 0..) |col, expected_name, coli| {
+        try std.testing.expectEqualStrings(expected_name, col.column_name);
+        try std.testing.expect(col.data.len > 0);
+        for (0..col.data.len) |rowi| {
+            const data = col.data.get(rowi);
+            switch (data) {
+                .string => {
+                    try std.testing.expectEqualStrings(rows[rowi][coli].string, data.string);
+                },
+                else => {
+                    try std.testing.expectEqual(rows[rowi][coli], data);
+                },
+            }
+        }
+    }
+}
 
 test "table creation and destruction" {
     const schema = Schema{

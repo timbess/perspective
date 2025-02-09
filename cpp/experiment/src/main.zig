@@ -1,6 +1,10 @@
 const std = @import("std");
 const column = @import("columns.zig");
 const root = @import("root.zig");
+const Schema = root.Schema;
+const Dtype = root.Dtype;
+const Scalar = root.Scalar;
+const Table = @import("table.zig").Table;
 
 pub fn main() !void {
     var allocator = std.heap.GeneralPurposeAllocator(.{}){};
@@ -12,40 +16,26 @@ pub fn main() !void {
     var bw = std.io.bufferedWriter(stdout_file);
     const stdout = bw.writer();
 
-    var col = try column.ScalarColumn(root.Dtype.u32).init(allocator.allocator(), "u32_column");
-    defer col.deinit();
+    stdout.print("Test");
 
-    for (0..10) |i| {
-        const value: u32 = @intCast(i);
-        try col.append(value);
-    }
+    const schema = Schema{
+        .fields = &[_]root.Field{
+            .{ .name = "x", .dtype = Dtype.u32 },
+            .{ .name = "y", .dtype = Dtype.f64 },
+            .{ .name = "label", .dtype = Dtype.string },
+        },
+    };
 
-    try stdout.print("Column size: {d}\n", .{col.size()});
-    try stdout.print("Column dtype: {s}\n", .{@tagName(col.dtype)});
+    var table = try Table.init(std.testing.allocator, "test_table", schema);
+    defer table.deinit();
 
-    for (0..col.size()) |i| {
-        const value = col.get(i);
-        try stdout.print("Value at index {d}: {?}\n", .{ i, value });
-    }
+    table.appendRows([_]Scalar{
+        .{ .u32 = 42 },
+        .{ .f64 = 10.5 },
+        .{ .string = "hello" },
+    });
 
-    // Test out strings
-    var arena = std.heap.ArenaAllocator.init(allocator.allocator());
-    defer arena.deinit();
-
-    var strCol = try column.StringColumn().init(allocator.allocator(), "test_column");
-    defer strCol.deinit();
-
-    try strCol.append("hello");
-    try strCol.append("world");
-    try strCol.append("hello");
-    try strCol.append("zig");
-
-    for (0..strCol.size()) |i| {
-        const value = strCol.get(i);
-        try stdout.print("String at index {d}: {s}\n", .{ i, value.? });
-    }
-
-    try bw.flush(); // don't forget to flush!
+    try bw.flush();
 }
 
 test "simple test" {

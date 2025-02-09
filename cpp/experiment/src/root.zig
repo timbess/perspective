@@ -1,3 +1,4 @@
+const std = @import("std");
 pub const columns = @import("columns.zig");
 
 pub const Schema = struct {
@@ -15,6 +16,14 @@ pub const Dtype = enum {
     i32,
     f64,
     string,
+
+    pub fn maxAlignment() comptime_int {
+        var max = std.math.maxInt(comptime_int);
+        for (std.meta.fields(@This())) |f| {
+            max = @max(@alignOf(f.field_type.underlying()), max);
+        }
+        return max;
+    }
 
     pub fn underlying(self: Dtype) type {
         return switch (self) {
@@ -66,4 +75,5 @@ pub const Scalar = union(Dtype) {
 
 pub const PspError = error{
     InvalidDtype,
+    InvalidColumnCount,
 };
