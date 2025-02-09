@@ -61,3 +61,4 @@ venv/
 rust/perspective-python/perspective_python-*.data
 .zig-cache/
 zig-out/
+arrow-build/

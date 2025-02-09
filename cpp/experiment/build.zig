@@ -24,11 +24,6 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    // This declares intent for the library to be installed into the standard
-    // location when the user invokes the "install" step (the default step when
-    // running `zig build`).
-    b.installArtifact(lib);
-
     const exe = b.addExecutable(.{
         .name = "experiment",
         .root_source_file = b.path("src/main.zig"),
@@ -36,10 +31,37 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    const arrow_includes = [_][]const u8{
+        "arrow/cpp/src",
+        "arrow-build/src",
+        ".",
+    };
+
+    const arrow_libraries = [_][]const u8{"arrow-build/release"};
+
+    for (arrow_includes) |path| {
+        lib.addSystemIncludePath(b.path(path));
+        exe.addSystemIncludePath(b.path(path));
+    }
+
+    for (arrow_libraries) |path| {
+        lib.addLibraryPath(b.path(path));
+        exe.addLibraryPath(b.path(path));
+    }
+
+    lib.linkLibCpp();
+    exe.linkLibCpp();
+    lib.linkSystemLibrary("arrow");
+    lib.addCSourceFile(.{
+        .file = b.path("ffi/bridge.cpp"),
+    });
+
     // This declares intent for the executable to be installed into the
     // standard location when the user invokes the "install" step (the default
     // step when running `zig build`).
     b.installArtifact(exe);
+
+    b.installArtifact(lib);
 
     // This *creates* a Run step in the build graph, to be executed when another
     // step is evaluated that depends on it. The next line below will establish
@@ -72,16 +94,23 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    const run_lib_unit_tests = b.addRunArtifact(lib_unit_tests);
+    // lib_unit_tests.linkLibC();
 
-    // TODO: This shouldn't be necessary...
-    const column_tests = b.addTest(.{
-        .root_source_file = b.path("src/columns.zig"),
-        .target = target,
-        .optimize = optimize,
+    for (arrow_includes) |path| {
+        lib_unit_tests.addSystemIncludePath(b.path(path));
+    }
+
+    for (arrow_libraries) |path| {
+        lib_unit_tests.addLibraryPath(b.path(path));
+    }
+
+    lib_unit_tests.linkLibCpp();
+    lib_unit_tests.linkSystemLibrary("arrow");
+    lib_unit_tests.addCSourceFile(.{
+        .file = b.path("ffi/bridge.cpp"),
     });
 
-    const run_column_tests = b.addRunArtifact(column_tests);
+    const run_lib_unit_tests = b.addRunArtifact(lib_unit_tests);
 
     const exe_unit_tests = b.addTest(.{
         .root_source_file = b.path("src/main.zig"),
@@ -97,5 +126,4 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_lib_unit_tests.step);
     test_step.dependOn(&run_exe_unit_tests.step);
-    test_step.dependOn(&run_column_tests.step);
 }

@@ -1,5 +1,6 @@
 const std = @import("std");
 pub const columns = @import("columns.zig");
+const arrow = @import("arrow.zig");
 
 pub const Schema = struct {
     fields: []const Field,
@@ -77,3 +78,9 @@ pub const PspError = error{
     InvalidDtype,
     InvalidColumnCount,
 };
+
+test {
+    _ = @import("columns.zig");
+    _ = @import("table.zig");
+    _ = @import("arrow.zig");
+}
