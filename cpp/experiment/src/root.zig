@@ -3,7 +3,27 @@ pub const columns = @import("columns.zig");
 const arrow = @import("arrow.zig");
 
 pub const Schema = struct {
-    fields: []const Field,
+    fields: std.ArrayList(Field),
+
+    pub fn init(allocator: std.mem.Allocator) !Schema {
+        return .{
+            .fields = std.ArrayList(Field).init(allocator),
+        };
+    }
+
+    pub fn deinit(self: *Schema) void {
+        for (self.fields.items) |f| {
+            self.fields.allocator.free(f.name);
+        }
+        self.fields.deinit();
+    }
+
+    pub fn addField(self: *Schema, field: Field) !void {
+        try self.fields.append(Field{
+            .name = try self.fields.allocator.dupe(u8, field.name),
+            .dtype = field.dtype,
+        });
+    }
 };
 
 pub const Field = struct {
@@ -77,6 +97,7 @@ pub const Scalar = union(Dtype) {
 pub const PspError = error{
     InvalidDtype,
     InvalidColumnCount,
+    ColumnSizeMismatch,
 };
 
 test {

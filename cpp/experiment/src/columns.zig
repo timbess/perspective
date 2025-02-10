@@ -10,6 +10,7 @@ const PspError = root.PspError;
 /// underlying concrete type when needed.
 pub const Column = struct {
     ptr: *anyopaque,
+    name: []const u8,
     appendScalarFn: *const fn (*anyopaque, Scalar) anyerror!void,
     getScalarFn: *const fn (*anyopaque, usize) ?Scalar,
     sizeFn: *const fn (*anyopaque) usize,
@@ -18,9 +19,10 @@ pub const Column = struct {
 
     const Self = @This();
 
-    fn init(ptr_: *anyopaque, dtype: Dtype, comptime vtable: type) Self {
+    fn init(ptr_: *anyopaque, name: []const u8, dtype: Dtype, comptime vtable: type) Self {
         return .{
             .ptr = ptr_,
+            .name = name,
             .appendScalarFn = vtable.appendScalar,
             .getScalarFn = vtable.getScalar,
             .sizeFn = vtable.size,
@@ -41,7 +43,7 @@ pub const Column = struct {
         return self.getScalarFn(self.ptr, index);
     }
 
-    pub fn size(self: *Self) usize {
+    pub fn size(self: *const Self) usize {
         return self.sizeFn(self.ptr);
     }
 
@@ -88,25 +90,32 @@ pub fn ScalarColumn(comptime dtype: Dtype) type {
     return struct {
         name: []const u8,
         dtype: Dtype,
-        data: std.ArrayList(dtype.underlying()),
+        data: std.ArrayListUnmanaged(dtype.underlying()),
+        allocator: std.mem.Allocator,
 
         const Self = @This();
         const vtable = ColumnVtable(dtype);
 
         pub fn init(allocator: std.mem.Allocator, name: []const u8) !Self {
             return Self{
-                .name = name,
+                .name = try allocator.dupe(u8, name),
                 .dtype = dtype,
-                .data = std.ArrayList(dtype.underlying()).init(allocator),
+                .data = std.ArrayListUnmanaged(dtype.underlying()){},
+                .allocator = allocator,
             };
         }
 
         pub fn deinit(self: *Self) void {
-            self.data.deinit();
+            self.allocator.free(self.name);
+            self.data.deinit(self.allocator);
+        }
+
+        pub fn ensureSize(self: *Self, capacity: usize) !void {
+            try self.data.ensureTotalCapacity(self.allocator, capacity);
         }
 
         pub fn append(self: *Self, value: dtype.underlying()) !void {
-            try self.data.append(value);
+            try self.data.append(self.allocator, value);
         }
 
         pub fn get(self: *Self, index: usize) ?dtype.underlying() {
@@ -116,7 +125,7 @@ pub fn ScalarColumn(comptime dtype: Dtype) type {
 
         pub fn appendScalar(self: *Self, value: Scalar) !void {
             if (@intFromEnum(dtype) == @intFromEnum(value)) {
-                try self.data.append(@field(value, @tagName(dtype)));
+                try self.data.append(self.allocator, @field(value, @tagName(dtype)));
             } else {
                 return PspError.InvalidDtype;
             }
@@ -132,7 +141,7 @@ pub fn ScalarColumn(comptime dtype: Dtype) type {
         }
 
         pub fn toColumn(self: *Self) Column {
-            return Column.init(self, dtype, vtable);
+            return Column.init(self, self.name, dtype, vtable);
         }
     };
 }
@@ -205,13 +214,14 @@ pub const StringColumn = struct {
         var vocab = Vocab.init(allocator);
         errdefer vocab.deinit();
         return Self{
-            .name = name,
+            .name = try allocator.dupe(u8, name),
             .data = data,
             .vocab = vocab,
         };
     }
 
     pub fn deinit(self: *Self) void {
+        self.data.allocator.free(self.name);
         self.data.deinit();
         self.vocab.deinit();
     }
@@ -245,7 +255,7 @@ pub const StringColumn = struct {
     }
 
     pub fn toColumn(self: *Self) Column {
-        return Column.init(self, Dtype.string, vtable);
+        return Column.init(self, self.name, Dtype.string, vtable);
     }
 };
 

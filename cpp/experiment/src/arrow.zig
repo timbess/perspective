@@ -1,6 +1,10 @@
 const std = @import("std");
 const columns = @import("columns.zig");
 const root = @import("root.zig");
+const Scalar = root.Scalar;
+const table_mod = @import("table.zig");
+const Table = table_mod.Table;
+const Schema = table_mod.Schema;
 const Dtype = root.Dtype;
 const PspError = root.PspError;
 const arrow_ffi = @cImport({
@@ -66,6 +70,35 @@ pub const ArrowTable = struct {
             },
         }
     }
+
+    pub fn toTable(self: *Self, allocator: std.mem.Allocator) !Table {
+        const fields = try allocator.alloc(arrow_ffi.Field, self.numColumns());
+        defer allocator.free(fields);
+        try self.readFields(fields);
+
+        var table = try Table.init(allocator, "TEST", try Schema.init(allocator));
+
+        for (fields) |field| {
+            const dt = cpp_dtype_to_zig(field.dtype);
+            switch (dt) {
+                .string => unreachable,
+                inline else => |dtype| {
+                    const ColType = dtype.coltype();
+
+                    var col_data: *ColType = try allocator.create(ColType);
+                    col_data.* = try ColType.init(allocator, std.mem.span(field.name));
+                    try col_data.ensureSize(self.numRows());
+
+                    col_data.data.items.len = self.numRows();
+                    self.readInto(std.mem.span(field.name), col_data.data.items);
+
+                    try table.addColumn(col_data.toColumn());
+                },
+            }
+        }
+
+        return table;
+    }
 };
 
 test "Basic Arrow Functionality" {
@@ -101,4 +134,19 @@ test "Basic Arrow Functionality" {
     arrow.readInto(nm, column_data_slice);
 
     try std.testing.expectEqualSlices(i32, &[_]i32{ 1, 2, 3 }, &column_data_buffer);
+
+    var table = try arrow.toTable(std.testing.allocator);
+    defer table.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const local = arena.allocator();
+    const data = try table.sliceRows(local, 0, 3);
+
+    for (data) |d| {
+        try std.testing.expectEqualStrings("x", d.column_name);
+        for (1..4) |i| {
+            try std.testing.expectEqual(Scalar{ .i32 = @intCast(i) }, d.data.get(i - 1));
+        }
+    }
 }
