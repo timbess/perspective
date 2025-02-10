@@ -30,6 +30,7 @@ pub const Table = struct {
 
     pub fn fromArrow(allocator: std.mem.Allocator, name: []const u8, arrow_bytes: []const u8) !Self {
         var arrow = arrow_mod.ArrowTable.init(arrow_bytes);
+        defer arrow.deinit();
         return try arrow.toTable(allocator, name);
     }
 

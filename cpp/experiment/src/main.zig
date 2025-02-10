@@ -8,20 +8,21 @@ const Scalar = root.Scalar;
 const Table = @import("table.zig").Table;
 
 pub fn main() !void {
+    var gpa: std.heap.GeneralPurposeAllocator(.{}) = undefined;
     var allocator: std.mem.Allocator = undefined;
 
-    switch (builtin.mode) {
-        .Debug => {
-            allocator = std.heap.c_allocator;
-        },
-        else => {
-            var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-            allocator = gpa.allocator();
-            defer {
-                std.debug.assert(!gpa.detectLeaks());
-                _ = gpa.deinit();
-            }
-        },
+    if (builtin.mode == .Debug) {
+        gpa = std.heap.GeneralPurposeAllocator(.{}){};
+        allocator = gpa.allocator();
+    } else {
+        allocator = std.heap.c_allocator;
+    }
+
+    defer {
+        if (builtin.mode == .Debug) {
+            std.debug.assert(!gpa.detectLeaks());
+            _ = gpa.deinit();
+        }
     }
 
     const stdout_file = std.io.getStdOut().writer();
@@ -34,6 +35,7 @@ pub fn main() !void {
     const f = try std.fs.openFileAbsolute(path, .{});
 
     const bytes = try f.readToEndAlloc(allocator, std.math.maxInt(u64));
+    defer allocator.free(bytes);
     var table = try Table.fromArrow(allocator, "test", bytes);
     defer table.deinit();
 
