@@ -1,6 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const columns = @import("columns.zig");
+const arrow_mod = @import("arrow.zig");
 const Column = columns.Column;
 
 const root = @import("root.zig");
@@ -26,6 +27,11 @@ pub const Table = struct {
     size: usize,
 
     const Self = @This();
+
+    pub fn fromArrow(allocator: std.mem.Allocator, name: []const u8, arrow_bytes: []const u8) !Self {
+        var arrow = arrow_mod.ArrowTable.init(arrow_bytes);
+        return try arrow.toTable(allocator, name);
+    }
 
     pub fn init(allocator: std.mem.Allocator, name: []const u8, schema: Schema) !Self {
         var cols = try std.ArrayListUnmanaged(Column).initCapacity(allocator, schema.fields.items.len);
@@ -130,19 +136,19 @@ pub const Table = struct {
                     const ColType = dtype.coltype();
                     const typed_col: *ColType = try col.reflect(dtype);
 
-                    const col_size = typed_col.size();
+                    // const col_size = typed_col.size();
 
-                    r.data.len = col_size;
+                    r.data.len = row_count;
                     var dst = r.data.slice().items(ScalarArray.Field.data);
-                    dst.len = col_size;
+                    dst.len = row_count;
                     var tag_dst = r.data.slice().items(ScalarArray.Field.tags);
-                    tag_dst.len = col_size;
+                    tag_dst.len = row_count;
 
                     const Bare = @typeInfo(@TypeOf(dst)).Pointer.child;
 
                     // Has to be a loop because the contiguous int columns are smaller than the "Scalar" union
-                    for (rstart..rend) |i| {
-                        dst[i] = @unionInit(Bare, @tagName(dtype), typed_col.data.items[i]);
+                    for (rstart..rend, 0..) |i, dst_i| {
+                        dst[dst_i] = @unionInit(Bare, @tagName(dtype), typed_col.data.items[i]);
                     }
 
                     @memset(tag_dst.ptr[rstart..rend], dtype);

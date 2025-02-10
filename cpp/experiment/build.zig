@@ -50,9 +50,13 @@ pub fn build(b: *std.Build) void {
     }
 
     lib.linkLibCpp();
-    exe.linkLibCpp();
     lib.linkSystemLibrary("arrow");
     lib.addCSourceFile(.{
+        .file = b.path("ffi/bridge.cpp"),
+    });
+    exe.linkLibCpp();
+    exe.linkSystemLibrary("arrow");
+    exe.addCSourceFile(.{
         .file = b.path("ffi/bridge.cpp"),
     });
 

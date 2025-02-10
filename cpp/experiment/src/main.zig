@@ -23,30 +23,23 @@ pub fn main() !void {
             }
         },
     }
+
     const stdout_file = std.io.getStdOut().writer();
     var bw = std.io.bufferedWriter(stdout_file);
     const stdout = bw.writer();
 
-    const schema = Schema{
-        .fields = &[_]root.Field{
-            .{ .name = "x", .dtype = Dtype.u32 },
-            .{ .name = "y", .dtype = Dtype.f64 },
-            .{ .name = "label", .dtype = Dtype.string },
-        },
-    };
+    var path_buffer: [std.fs.MAX_PATH_BYTES]u8 = undefined;
+    const path = try std.fs.realpath("./src/test.arrow", &path_buffer);
 
-    var table = try Table.init(allocator, "test_table", schema);
+    const f = try std.fs.openFileAbsolute(path, .{});
+
+    const bytes = try f.readToEndAlloc(allocator, std.math.maxInt(u64));
+    var table = try Table.fromArrow(allocator, "test", bytes);
     defer table.deinit();
-
-    try table.appendRow(&[_]Scalar{
-        Scalar{ .u32 = 42 },
-        Scalar{ .f64 = 10.5 },
-        Scalar{ .string = "hello" },
-    });
 
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
-    const columns = try table.sliceRows(arena.allocator(), 0, 1);
+    const columns = try table.sliceRows(arena.allocator(), 0, 3);
 
     for (columns) |*c| {
         try stdout.print("Col: {s}\n", .{c.column_name});

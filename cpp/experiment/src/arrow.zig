@@ -71,12 +71,12 @@ pub const ArrowTable = struct {
         }
     }
 
-    pub fn toTable(self: *Self, allocator: std.mem.Allocator) !Table {
+    pub fn toTable(self: *Self, allocator: std.mem.Allocator, name: []const u8) !Table {
         const fields = try allocator.alloc(arrow_ffi.Field, self.numColumns());
         defer allocator.free(fields);
         try self.readFields(fields);
 
-        var table = try Table.init(allocator, "TEST", try Schema.init(allocator));
+        var table = try Table.init(allocator, name, try Schema.init(allocator));
 
         for (fields) |field| {
             const dt = cpp_dtype_to_zig(field.dtype);
@@ -135,7 +135,7 @@ test "Basic Arrow Functionality" {
 
     try std.testing.expectEqualSlices(i32, &[_]i32{ 1, 2, 3 }, &column_data_buffer);
 
-    var table = try arrow.toTable(std.testing.allocator);
+    var table = try arrow.toTable(std.testing.allocator, "TEST");
     defer table.deinit();
 
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
