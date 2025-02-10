@@ -36,6 +36,8 @@ pub const Dtype = enum {
     u64,
     i32,
     f64,
+    date32,
+    date64,
     string,
 
     pub fn maxAlignment() comptime_int {
@@ -52,6 +54,8 @@ pub const Dtype = enum {
             .u64 => u64,
             .i32 => i32,
             .f64 => f64,
+            .date32 => u32,
+            .date64 => u64,
             .string => []const u8,
         };
     }
@@ -62,13 +66,15 @@ pub const Dtype = enum {
             .u64 => columns.ScalarColumn(self),
             .i32 => columns.ScalarColumn(self),
             .f64 => columns.ScalarColumn(self),
+            .date32 => columns.ScalarColumn(self),
+            .date64 => columns.ScalarColumn(self),
             .string => columns.StringColumn,
         };
     }
 
     pub fn isScalar(self: Dtype) bool {
         return switch (self) {
-            .u32, .u64, .i32, .f64 => true,
+            .u32, .u64, .i32, .f64, .date32, .date64 => true,
             else => false,
         };
     }
@@ -91,6 +97,8 @@ pub const Scalar = union(Dtype) {
     u64: u64,
     i32: i32,
     f64: f64,
+    date32: u32, // Days since UNIX epoch
+    date64: u64, // Milliseconds ^
     string: []const u8,
 };
 

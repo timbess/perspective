@@ -9,6 +9,8 @@ enum dtype {
     u64,
     i32,
     f64,
+    date32,
+    date64,
     string,
 };
 

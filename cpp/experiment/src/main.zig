@@ -30,7 +30,7 @@ pub fn main() !void {
     const stdout = bw.writer();
 
     var path_buffer: [std.fs.MAX_PATH_BYTES]u8 = undefined;
-    const path = try std.fs.realpath("./src/test.arrow", &path_buffer);
+    const path = try std.fs.realpath("./src/superstore.lz4.arrow", &path_buffer);
 
     const f = try std.fs.openFileAbsolute(path, .{});
 

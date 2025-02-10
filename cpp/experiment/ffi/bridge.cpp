@@ -165,7 +165,14 @@ ReadColumns(struct OpaqueArrow* arrow, struct Field* out) {
                 type = dtype::f64;
                 break;
             case arrow::Type::STRING:
+            case arrow::Type::DICTIONARY:
                 type = dtype::string;
+                break;
+            case arrow::Type::DATE32:
+                type = dtype::date32;
+                break;
+            case arrow::Type::DATE64:
+                type = dtype::date64;
                 break;
             case arrow::Type::INT64:
             case arrow::Type::NA:
@@ -178,8 +185,6 @@ ReadColumns(struct OpaqueArrow* arrow, struct Field* out) {
             case arrow::Type::FLOAT:
             case arrow::Type::BINARY:
             case arrow::Type::FIXED_SIZE_BINARY:
-            case arrow::Type::DATE32:
-            case arrow::Type::DATE64:
             case arrow::Type::TIMESTAMP:
             case arrow::Type::TIME32:
             case arrow::Type::TIME64:
@@ -191,7 +196,6 @@ ReadColumns(struct OpaqueArrow* arrow, struct Field* out) {
             case arrow::Type::STRUCT:
             case arrow::Type::SPARSE_UNION:
             case arrow::Type::DENSE_UNION:
-            case arrow::Type::DICTIONARY:
             case arrow::Type::MAP:
             case arrow::Type::EXTENSION:
             case arrow::Type::FIXED_SIZE_LIST:
