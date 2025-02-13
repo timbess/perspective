@@ -18,12 +18,12 @@ pub fn main() !void {
         allocator = std.heap.c_allocator;
     }
 
-    // defer {
-    //     if (builtin.mode == .Debug) {
-    //         std.debug.assert(!gpa.detectLeaks());
-    //         _ = gpa.deinit();
-    //     }
-    // }
+    defer {
+        if (builtin.mode == .Debug) {
+            std.debug.assert(!gpa.detectLeaks());
+            _ = gpa.deinit();
+        }
+    }
 
     const stdout_file = std.io.getStdOut().writer();
     var bw = std.io.bufferedWriter(stdout_file);
@@ -41,7 +41,7 @@ pub fn main() !void {
 
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
-    const columns = try table.sliceRows(arena.allocator(), 0, 10);
+    const columns = try table.sliceRows(arena.allocator(), 0, 3);
 
     for (columns) |*c| {
         try stdout.print("Col: {s}\n", .{c.column_name});

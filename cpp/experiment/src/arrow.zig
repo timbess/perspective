@@ -84,7 +84,10 @@ pub const ArrowTable = struct {
             std.log.debug("Field name: {s}, dtype: {s}", .{ std.mem.span(f.name), @tagName(cpp_dtype_to_zig(f.dtype)) });
         }
 
-        var table = try Table.init(allocator, name, try Schema.init(allocator));
+        var schema = try Schema.init(allocator);
+        errdefer schema.deinit();
+        var table = try Table.init(allocator, name, schema);
+        errdefer table.deinit();
 
         for (fields) |field| {
             const dt = cpp_dtype_to_zig(field.dtype);
@@ -94,7 +97,9 @@ pub const ArrowTable = struct {
                     const ColType = columns.StringColumn;
 
                     var col_data: *ColType = try allocator.create(ColType);
+                    errdefer allocator.destroy(col_data);
                     col_data.* = try ColType.init(allocator, field_name);
+                    errdefer col_data.deinit();
                     try col_data.ensureSize(self.numRows());
 
                     col_data.data.items.len = self.numRows();
@@ -131,7 +136,9 @@ pub const ArrowTable = struct {
                     const ColType = dtype.coltype();
 
                     var col_data: *ColType = try allocator.create(ColType);
+                    errdefer allocator.destroy(col_data);
                     col_data.* = try ColType.init(allocator, field_name);
+                    errdefer col_data.deinit();
                     try col_data.ensureSize(self.numRows());
 
                     col_data.data.items.len = self.numRows();
