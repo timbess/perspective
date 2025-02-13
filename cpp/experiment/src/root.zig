@@ -18,6 +18,17 @@ pub const Schema = struct {
         self.fields.deinit();
     }
 
+    pub fn removeField(self: *Schema, name: []const u8) ?void {
+        for (self.fields.items, 0..) |f, i| {
+            if (std.mem.eql(u8, f.name, name)) {
+                self.fields.allocator.free(f.name);
+                _ = self.fields.orderedRemove(i);
+                return;
+            } else {}
+        }
+        return null;
+    }
+
     pub fn addField(self: *Schema, field: Field) !void {
         try self.fields.append(Field{
             .name = try self.fields.allocator.dupe(u8, field.name),

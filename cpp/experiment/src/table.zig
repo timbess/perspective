@@ -38,13 +38,16 @@ pub const Table = struct {
         var cols = try std.ArrayListUnmanaged(Column).initCapacity(allocator, schema.fields.items.len);
         var name_mapping = std.StringHashMapUnmanaged(Column){};
         try name_mapping.ensureTotalCapacity(allocator, @truncate(schema.fields.items.len));
+        errdefer name_mapping.deinit(allocator);
         for (schema.fields.items) |field| {
             switch (field.dtype) {
                 inline else => |dtype| {
                     const ColType = dtype.coltype();
                     var col: *ColType = try allocator.create(ColType);
+                    errdefer allocator.destroy(col);
                     // Bypass local arena to let column's choose how to wrap the top level allocator.
                     col.* = try ColType.init(allocator, field.name);
+                    errdefer col.deinit();
                     const erased = col.toColumn();
                     cols.appendAssumeCapacity(erased);
                     try name_mapping.put(allocator, field.name, erased);
@@ -87,8 +90,11 @@ pub const Table = struct {
             return PspError.ColumnSizeMismatch;
         }
         try self.columns.append(self.allocator, col);
+        errdefer _ = self.columns.pop();
         try self.name_mapping.put(self.allocator, col.name, col);
+        errdefer _ = self.name_mapping.remove(col.name);
         try self.schema.addField(Field{ .name = col.name, .dtype = col.dtype });
+        errdefer _ = self.schema.removeField(col.name);
         self.size = col_size;
     }
 
@@ -173,7 +179,7 @@ test "table slices" {
     const fields = [_]root.Field{
         .{ .name = "id", .dtype = Dtype.u32 },
         .{ .name = "value", .dtype = Dtype.f64 },
-        // .{ .name = "label", .dtype = Dtype.string },
+        .{ .name = "label", .dtype = Dtype.string },
     };
     var schema = try Schema.init(std.testing.allocator);
     for (fields) |f| {
@@ -184,12 +190,9 @@ test "table slices" {
     defer table.deinit();
 
     const rows: []const []const Scalar = &[_][]const Scalar{
-        // &[_]Scalar{ .{ .u32 = 1 }, .{ .f64 = 1 }, .{ .string = "foo" } },
-        // &[_]Scalar{ .{ .u32 = 2 }, .{ .f64 = 2 }, .{ .string = "bar" } },
-        // &[_]Scalar{ .{ .u32 = 3 }, .{ .f64 = 3 }, .{ .string = "baz" } },
-        &[_]Scalar{ .{ .u32 = 1 }, .{ .f64 = 1 } },
-        &[_]Scalar{ .{ .u32 = 2 }, .{ .f64 = 2 } },
-        &[_]Scalar{ .{ .u32 = 3 }, .{ .f64 = 3 } },
+        &[_]Scalar{ .{ .u32 = 1 }, .{ .f64 = 1 }, .{ .string = "foo" } },
+        &[_]Scalar{ .{ .u32 = 2 }, .{ .f64 = 2 }, .{ .string = "bar" } },
+        &[_]Scalar{ .{ .u32 = 3 }, .{ .f64 = 3 }, .{ .string = "baz" } },
     };
 
     try table.appendRows(rows);
@@ -200,8 +203,7 @@ test "table slices" {
     defer arena.deinit();
     const slices = try table.sliceRows(arena.allocator(), 0, 3);
 
-    // const names = [_][]const u8{ "id", "value", "label" };
-    const names = [_][]const u8{ "id", "value" };
+    const names = [_][]const u8{ "id", "value", "label" };
 
     try std.testing.expect(slices.len == schema.fields.items.len);
     for (slices, names, 0..) |col, expected_name, coli| {
@@ -225,7 +227,7 @@ test "table creation and destruction" {
     const fields = [_]root.Field{
         .{ .name = "id", .dtype = Dtype.u32 },
         .{ .name = "value", .dtype = Dtype.f64 },
-        // .{ .name = "label", .dtype = Dtype.string },
+        .{ .name = "label", .dtype = Dtype.string },
     };
     var schema = try Schema.init(std.testing.allocator);
     for (fields) |f| {
