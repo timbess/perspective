@@ -1,4 +1,5 @@
 const std = @import("std");
+const protobuf = @import("protobuf");
 
 // Although this function looks imperative, note that its job is to
 // declaratively construct a build graph that will be executed by an external
@@ -14,6 +15,10 @@ pub fn build(b: *std.Build) void {
     // between Debug, ReleaseSafe, ReleaseFast, and ReleaseSmall. Here we do not
     // set a preferred release mode, allowing the user to decide how to optimize.
     const optimize = b.standardOptimizeOption(.{});
+
+    /////////////////////
+    // Targets Section
+    /////////////////////
 
     const lib = b.addStaticLibrary(.{
         .name = "experiment",
@@ -58,12 +63,45 @@ pub fn build(b: *std.Build) void {
     exe.linkSystemLibrary("arrow");
     exe.linkLibrary(lib);
 
+    /////////////////////
+    // Protobuf Section
+    /////////////////////
+
+    const protobuf_dep = b.dependency("protobuf", .{
+        .target = target,
+        .optimize = optimize,
+    });
+
+    const gen_proto = b.step("gen-proto", "generates zig files from protocol buffer definitions");
+    const protoc_step = protobuf.RunProtocStep.create(b, protobuf_dep.builder, target, .{
+        // out directory for the generated zig files
+        .destination_directory = b.path("src/generated_protos"),
+        .source_files = &.{
+            "protos/perspective.proto",
+        },
+        .include_directories = &.{},
+    });
+
+    gen_proto.dependOn(&protoc_step.step);
+    lib.step.dependOn(&protoc_step.step);
+    exe.step.dependOn(&protoc_step.step);
+
+    lib.root_module.addImport("protobuf", protobuf_dep.module("protobuf"));
+
+    /////////////////////
+    // Install Section
+    /////////////////////
+
     // This declares intent for the executable to be installed into the
     // standard location when the user invokes the "install" step (the default
     // step when running `zig build`).
     b.installArtifact(exe);
 
     b.installArtifact(lib);
+
+    /////////////////////
+    // Run Section
+    /////////////////////
 
     // This *creates* a Run step in the build graph, to be executed when another
     // step is evaluated that depends on it. The next line below will establish
@@ -87,6 +125,10 @@ pub fn build(b: *std.Build) void {
     // This will evaluate the `run` step rather than the default, which is "install".
     const run_step = b.step("run", "Run the app");
     run_step.dependOn(&run_cmd.step);
+
+    /////////////////
+    // Test Section
+    /////////////////
 
     // Creates a step for unit testing. This only builds the test executable
     // but does not run it.

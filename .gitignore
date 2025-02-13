@@ -62,3 +62,4 @@ rust/perspective-python/perspective_python-*.data
 .zig-cache/
 zig-out/
 arrow-build/
+generated_protos/
