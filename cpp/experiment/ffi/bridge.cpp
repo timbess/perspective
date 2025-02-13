@@ -4,8 +4,12 @@
 #include <arrow/array/array_binary.h>
 #include <arrow/array/array_primitive.h>
 #include <iostream>
+#include <memory>
 #include "bridge.h"
+#include "arrow/array/array_dict.h"
 #include "arrow/io/buffered.h"
+#include "arrow/type.h"
+#include "arrow/type_fwd.h"
 
 extern "C" {
 
@@ -20,6 +24,87 @@ ColumnType(OpaqueArrow* arrow, const char* column) {
 
     std::fputs("Unknown column type", stderr);
     std::abort();
+}
+
+int
+NumChunks(struct OpaqueArrow* arrow, const char* column_name) {
+    auto column = arrow->table->GetColumnByName(column_name);
+    if (column) {
+        return column->num_chunks();
+    }
+    return 0;
+}
+
+void
+GetDictColumn(
+    OpaqueArrow* arrow,
+    const char* column_name,
+    DictColumnChunk* out_dict_column_chunks
+) {
+    auto column = arrow->table->GetColumnByName(column_name);
+    if (!column || column->num_chunks() == 0) {
+        return;
+    }
+
+    for (auto i = 0; i < column->num_chunks(); ++i) {
+        auto chunk = column->chunk(i);
+        auto scol = std::dynamic_pointer_cast<arrow::DictionaryArray>(chunk);
+        std::shared_ptr<arrow::StringArray> dict =
+            std::static_pointer_cast<arrow::StringArray>(scol->dictionary());
+        if (!scol) {
+            std::fputs("Column is not a dictionary array", stderr);
+            std::abort();
+            return;
+        }
+        auto icol = scol->indices();
+        out_dict_column_chunks[i] = DictColumnChunk{
+            .dict_values = dict->value_data()->data(),
+            .offsets = dict->raw_value_offsets(),
+            .dict_size = static_cast<size_t>(dict->length()),
+            .indices = nullptr,
+            .indices_size = static_cast<size_t>(icol->length()),
+            // .index_type = scol->type_id(),
+        };
+        switch (icol->type_id()) {
+            case arrow::Type::UINT32: {
+                const auto indices =
+                    std::static_pointer_cast<arrow::UInt32Array>(icol);
+                out_dict_column_chunks[i].indices =
+                    const_cast<std::uint32_t*>(indices->raw_values());
+                out_dict_column_chunks[i].index_type = dtype::u32;
+                break;
+            }
+            case arrow::Type::INT32: {
+                const auto indices =
+                    std::static_pointer_cast<arrow::Int32Array>(icol);
+                out_dict_column_chunks[i].indices =
+                    const_cast<std::int32_t*>(indices->raw_values());
+                out_dict_column_chunks[i].index_type = dtype::i32;
+                break;
+            }
+            case arrow::Type::UINT64: {
+                const auto indices =
+                    std::static_pointer_cast<arrow::UInt64Array>(icol);
+                out_dict_column_chunks[i].indices =
+                    const_cast<std::uint64_t*>(indices->raw_values());
+                out_dict_column_chunks[i].index_type = dtype::u64;
+                break;
+            }
+            case arrow::Type::INT64: {
+                const auto indices =
+                    std::static_pointer_cast<arrow::Int64Array>(icol);
+                out_dict_column_chunks[i].indices =
+                    const_cast<std::int64_t*>(indices->raw_values());
+                out_dict_column_chunks[i].index_type = dtype::i64;
+                break;
+            }
+            default:
+                std::cerr << "Unsupported index type in dictionary column: "
+                          << icol->type()->ToString() << " " << icol->type_id()
+                          << '\n';
+                std::abort();
+        }
+    }
 }
 
 void
@@ -86,6 +171,15 @@ ReadInto(OpaqueArrow* arrow, const char* column, void* out_data, size_t len) {
                 bytes_written += copy_size * sizeof(double);
                 break;
             }
+            // case arrow::Type::DICTIONARY: {
+            //     auto scol =
+            //         std::static_pointer_cast<arrow::DictionaryArray>(array);
+            //     std::shared_ptr<arrow::StringArray> dict =
+            //         std::static_pointer_cast<arrow::StringArray>(
+            //             scol->dictionary()
+            //         );
+            //     dict->value_offsets()->data();
+            // }
             case arrow::Type::STRING: {
                 auto string_array =
                     std::static_pointer_cast<arrow::StringArray>(array);
@@ -99,6 +193,36 @@ ReadInto(OpaqueArrow* arrow, const char* column, void* out_data, size_t len) {
                     memcpy(dst + bytes_written, str.data(), copy_size);
                     bytes_written += copy_size;
                 }
+                break;
+            }
+            case arrow::Type::DATE32: {
+                auto date32_array =
+                    std::static_pointer_cast<arrow::Date32Array>(array);
+                size_t copy_size = std::min(
+                    (len - bytes_written) / sizeof(u32),
+                    static_cast<size_t>(date32_array->length())
+                );
+                memcpy(
+                    dst + bytes_written,
+                    date32_array->raw_values(),
+                    copy_size * sizeof(u32)
+                );
+                bytes_written += copy_size * sizeof(u32);
+                break;
+            }
+            case arrow::Type::DATE64: {
+                auto date64_array =
+                    std::static_pointer_cast<arrow::Date64Array>(array);
+                size_t copy_size = std::min(
+                    (len - bytes_written) / sizeof(u64),
+                    static_cast<size_t>(date64_array->length())
+                );
+                memcpy(
+                    dst + bytes_written,
+                    date64_array->raw_values(),
+                    copy_size * sizeof(u64)
+                );
+                bytes_written += copy_size * sizeof(u64);
                 break;
             }
             default:
@@ -175,6 +299,8 @@ ReadColumns(struct OpaqueArrow* arrow, struct Field* out) {
                 type = dtype::date64;
                 break;
             case arrow::Type::INT64:
+                type = dtype::i64;
+                break;
             case arrow::Type::NA:
             case arrow::Type::BOOL:
             case arrow::Type::UINT8:

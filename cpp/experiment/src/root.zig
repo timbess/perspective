@@ -35,6 +35,7 @@ pub const Dtype = enum {
     u32,
     u64,
     i32,
+    i64,
     f64,
     date32,
     date64,
@@ -53,6 +54,7 @@ pub const Dtype = enum {
             .u32 => u32,
             .u64 => u64,
             .i32 => i32,
+            .i64 => i64,
             .f64 => f64,
             .date32 => u32,
             .date64 => u64,
@@ -65,6 +67,7 @@ pub const Dtype = enum {
             .u32 => columns.ScalarColumn(self),
             .u64 => columns.ScalarColumn(self),
             .i32 => columns.ScalarColumn(self),
+            .i64 => columns.ScalarColumn(self),
             .f64 => columns.ScalarColumn(self),
             .date32 => columns.ScalarColumn(self),
             .date64 => columns.ScalarColumn(self),
@@ -74,7 +77,7 @@ pub const Dtype = enum {
 
     pub fn isScalar(self: Dtype) bool {
         return switch (self) {
-            .u32, .u64, .i32, .f64, .date32, .date64 => true,
+            .u32, .u64, .i32, .i64, .f64, .date32, .date64 => true,
             else => false,
         };
     }
@@ -96,6 +99,7 @@ pub const Scalar = union(Dtype) {
     u32: u32,
     u64: u64,
     i32: i32,
+    i64: i64,
     f64: f64,
     date32: u32, // Days since UNIX epoch
     date64: u64, // Milliseconds ^

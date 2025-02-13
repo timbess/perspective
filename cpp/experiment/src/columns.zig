@@ -150,7 +150,7 @@ pub fn ScalarColumn(comptime dtype: Dtype) type {
 /// strings in a contiguous block of memory, which can be more efficient when accessing repeated small
 /// string values (such as when a string column is iterated over). This also means we can free them all
 /// in one go at the end of the Column's lifetime.
-const Vocab = struct {
+pub const Vocab = struct {
     allocator: std.heap.ArenaAllocator,
     interned: std.StringHashMap([]const u8),
 
@@ -164,6 +164,16 @@ const Vocab = struct {
     pub fn deinit(self: *Vocab) void {
         self.interned.deinit();
         self.allocator.deinit();
+    }
+
+    pub fn loadDict(self: *Vocab, dict_values: []const u8, offsets: []const i32) !void {
+        std.debug.assert(dict_values.len == offsets.len - 1);
+        for (0..dict_values.len) |i| {
+            const start: usize = @intCast(offsets[i]);
+            const end: usize = @intCast(offsets[i + 1]);
+            const str_slice: []const u8 = dict_values[start..end];
+            _ = try self.intern(str_slice);
+        }
     }
 
     pub fn intern(self: *Vocab, str: []const u8) ![]const u8 {
@@ -248,6 +258,10 @@ pub const StringColumn = struct {
             return Scalar{ .string = str };
         }
         return null;
+    }
+
+    pub fn ensureSize(self: *Self, capacity: usize) !void {
+        try self.data.ensureTotalCapacity(capacity);
     }
 
     pub fn size(self: *Self) usize {

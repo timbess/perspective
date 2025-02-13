@@ -130,6 +130,7 @@ pub const Table = struct {
                 .data = ScalarArray{},
             };
             try r.data.ensureTotalCapacity(allocator, row_count);
+            std.log.debug("column: {s}, dtype: {s}", .{ field.name, @tagName(field.dtype) });
         }
         for (self.columns.items, result) |*col, *r| {
             switch (col.dtype) {
