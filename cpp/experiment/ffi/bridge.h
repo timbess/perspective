@@ -1,7 +1,9 @@
-#include <stddef.h>
 
 #ifdef __cplusplus
+#include <cstddef>
 extern "C" {
+#else
+#include <stddef.h>
 #endif
 
 enum dtype {

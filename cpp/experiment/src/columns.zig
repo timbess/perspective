@@ -82,15 +82,27 @@ pub fn ColumnVtable(comptime dtype: Dtype) type {
     };
 }
 
+const ValueStatus = enum {
+    defined,
+    undefined,
+    null,
+};
+
+test {
+    try std.testing.expectEqual(1, @sizeOf(ValueStatus));
+}
+
 /// A generic column type for scalar values. This is a template that should be instantiated with a specific Dtype.
 pub fn ScalarColumn(comptime dtype: Dtype) type {
     if (!dtype.isScalar()) {
         @compileError("Cannot create a ScalarColumn for non-scalar type " ++ @typeName(dtype));
     }
+
     return struct {
         name: []const u8,
         dtype: Dtype,
         data: std.ArrayListUnmanaged(dtype.underlying()),
+        nulls: std.ArrayListUnmanaged(ValueStatus),
         allocator: std.mem.Allocator,
 
         const Self = @This();
@@ -101,6 +113,7 @@ pub fn ScalarColumn(comptime dtype: Dtype) type {
                 .name = try allocator.dupe(u8, name),
                 .dtype = dtype,
                 .data = std.ArrayListUnmanaged(dtype.underlying()){},
+                .nulls = std.ArrayListUnmanaged(ValueStatus){},
                 .allocator = allocator,
             };
         }
@@ -108,6 +121,7 @@ pub fn ScalarColumn(comptime dtype: Dtype) type {
         pub fn deinit(self: *Self) void {
             self.allocator.free(self.name);
             self.data.deinit(self.allocator);
+            self.nulls.deinit(self.allocator);
         }
 
         pub fn ensureSize(self: *Self, capacity: usize) !void {

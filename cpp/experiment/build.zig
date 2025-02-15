@@ -4,7 +4,7 @@ const protobuf = @import("protobuf");
 // Although this function looks imperative, note that its job is to
 // declaratively construct a build graph that will be executed by an external
 // runner.
-pub fn build(b: *std.Build) void {
+pub fn build(b: *std.Build) !void {
     // Standard target options allows the person running `zig build` to choose
     // what target to build for. Here we do not override the defaults, which
     // means any target is allowed, and the default is native. Other options
@@ -36,7 +36,13 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    const arrow_includes = [_][]const u8{
+    if (target.query.os_tag == .emscripten) {
+        const emsdk_path = std.posix.getenv("EMSDK").?;
+        const include_path = b.pathJoin(&.{ emsdk_path, "/upstream/emscripten/cache/sysroot/include" });
+        lib.addSystemIncludePath(.{ .cwd_relative = include_path });
+    }
+
+    const arrow_includes = b.option([]const []const u8, "arrow_includes", "Arrow include paths") orelse &[_][]const u8{
         "arrow/cpp/src",
         "arrow-build/src",
         ".",
@@ -55,11 +61,6 @@ pub fn build(b: *std.Build) void {
     }
 
     lib.linkLibCpp();
-    lib.linkSystemLibrary("arrow");
-    lib.addCSourceFile(.{
-        .file = b.path("ffi/bridge.cpp"),
-    });
-    exe.linkLibCpp();
     exe.linkSystemLibrary("arrow");
     exe.linkLibrary(lib);
 
@@ -73,7 +74,7 @@ pub fn build(b: *std.Build) void {
     });
 
     const gen_proto = b.step("gen-proto", "generates zig files from protocol buffer definitions");
-    const protoc_step = protobuf.RunProtocStep.create(b, protobuf_dep.builder, target, .{
+    const protoc_step = protobuf.RunProtocStep.create(b, protobuf_dep.builder, b.graph.host, .{
         // out directory for the generated zig files
         .destination_directory = b.path("src/generated_protos"),
         .source_files = &.{
@@ -83,8 +84,8 @@ pub fn build(b: *std.Build) void {
     });
 
     gen_proto.dependOn(&protoc_step.step);
-    lib.step.dependOn(&protoc_step.step);
-    exe.step.dependOn(&protoc_step.step);
+    // lib.step.dependOn(&protoc_step.step);
+    // exe.step.dependOn(&protoc_step.step);
 
     lib.root_module.addImport("protobuf", protobuf_dep.module("protobuf"));
 
@@ -95,8 +96,11 @@ pub fn build(b: *std.Build) void {
     // This declares intent for the executable to be installed into the
     // standard location when the user invokes the "install" step (the default
     // step when running `zig build`).
-    b.installArtifact(exe);
-
+    if (target.result.os.tag != .emscripten) {
+        // b.installArtifact(exe);
+    }
+    // This is segfaulting zig lol
+    // _ = lib.getEmittedH();
     b.installArtifact(lib);
 
     /////////////////////

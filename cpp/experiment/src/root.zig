@@ -1,6 +1,114 @@
 const std = @import("std");
 pub const columns = @import("columns.zig");
 const arrow = @import("arrow.zig");
+const Table = @import("table.zig").Table;
+const builtin = @import("builtin");
+
+pub const std_options: std.Options = .{
+    .logFn = if (builtin.target.os.tag == .emscripten) log else std.log.defaultLog,
+    // .logFn = foo,
+};
+
+pub fn customLog(
+    comptime message_level: std.log.Level,
+    comptime _: @Type(.EnumLiteral),
+    comptime format: []const u8,
+    args: anytype,
+) void {
+    const level_txt = comptime message_level.asText();
+    // const prefix = if (scope == .default) ": " else "(" ++ @tagName(scope) ++ "): ";
+
+    // Choose a CSS style based on the log level.
+    const style = switch (message_level) {
+        .err => "background: #FF0000; color: #FFFFFF; padding: 2px 4px; border-radius: 3px;",
+        .warn => "background: #FFA500; color: #000000; padding: 2px 4px; border-radius: 3px;",
+        .info => "background: #1E90FF; color: #FFFFFF; padding: 2px 4px; border-radius: 3px;",
+        .debug => "background: #808080; color: #FFFFFF; padding: 2px 4px; border-radius: 3px;",
+    };
+
+    const stderr = std.io.getStdErr().writer();
+    var bw = std.io.bufferedWriter(stderr);
+    const writer = bw.writer();
+
+    std.debug.lockStdErr();
+    defer std.debug.unlockStdErr();
+
+    nosuspend {
+        // The format string here:
+        //   %c -> applies the given CSS style (for the [LEVEL] label)
+        //   %s -> the log level text
+        //   %c -> resets styling (empty string)
+        //   %s -> the prefix (e.g. scope information)
+        //   %s -> the user-provided message (with its own format specifiers)
+        //   \n -> new line at the end.
+        writer.print("{s}%c[%s{s}]%c", .{ style, level_txt }) catch return;
+        writer.print(format ++ "\n", args) catch return;
+        bw.flush() catch return;
+    }
+}
+
+extern fn emscripten_console_error([*c]const u8) void;
+extern fn emscripten_console_warn([*c]const u8) void;
+extern fn emscripten_console_log([*c]const u8) void;
+
+pub fn log(
+    comptime level: std.log.Level,
+    comptime scope: @TypeOf(.EnumLiteral),
+    comptime format: []const u8,
+    args: anytype,
+) void {
+    const level_txt = comptime level.asText();
+    const prefix2 = if (scope == .default) ": " else "(" ++ @tagName(scope) ++ "): ";
+    const prefix = level_txt ++ prefix2;
+
+    var buf: [1024]u8 = undefined;
+    const msg = std.fmt.bufPrintZ(buf[0 .. buf.len - 1], prefix ++ format, args) catch |err| {
+        switch (err) {
+            error.NoSpaceLeft => {
+                emscripten_console_error("log message too long, skipped.");
+                return;
+            },
+        }
+    };
+    switch (level) {
+        .err => emscripten_console_error(@ptrCast(msg.ptr)),
+        .warn => emscripten_console_warn(@ptrCast(msg.ptr)),
+        else => emscripten_console_log(@ptrCast(msg.ptr)),
+    }
+}
+
+pub export fn table_from_arrow(data: [*]const u8, data_size: usize) callconv(.C) *anyopaque {
+    var arrow_table = arrow.ArrowTable.init(data[0..data_size]);
+    defer arrow_table.deinit();
+    const table = std.heap.c_allocator.create(Table) catch unreachable;
+    table.* = arrow_table.toTable(std.heap.c_allocator, "TEST") catch unreachable;
+    return table;
+}
+
+pub export fn print_rows(table: ?*anyopaque, num_rows: usize) callconv(.C) void {
+    if (table == null) {
+        std.log.err("Got null table", .{});
+        return;
+    }
+
+    const t: *Table = @alignCast(@ptrCast(table.?));
+
+    var arena = std.heap.ArenaAllocator.init(std.heap.c_allocator);
+    defer arena.deinit();
+    const cols = t.sliceRows(arena.allocator(), 0, num_rows) catch unreachable;
+
+    for (cols) |*c| {
+        // try stdout.print("Col: {s}\n", .{c.column_name});
+        std.log.info("Col: {s}", .{c.column_name});
+        for (0..c.data.len) |i| {
+            const scalar = c.data.get(i);
+            switch (scalar) {
+                .string => |s| std.log.info("{s}", .{s}),
+                inline else => |s| std.log.info("{any}", .{s}),
+            }
+        }
+    }
+}
 
 pub const Schema = struct {
     fields: std.ArrayList(Field),

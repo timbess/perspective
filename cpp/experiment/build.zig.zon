@@ -27,6 +27,10 @@
             .url = "git+https://github.com/Arwalk/zig-protobuf?ref=v2.0.0#42ccf142e5d6b7de886b766af7d287021c561dfd",
             .hash = "1220ecab78918a9331e91abe0e15718464211a79d5578044a126c9633e5bd701bf28",
         },
+        .arrow = .{
+            .url = "git+https://github.com/apache/arrow?ref=apache-arrow-19.0.0#a999eaccb12378f9e4e9ab758f18edc25b0991e5",
+            .hash = "1220963a6d6c1928f4ca09928afc6f0f224a74a119e18e4ceb8eece839f6323d9270",
+        },
     },
     .paths = .{
         "build.zig",

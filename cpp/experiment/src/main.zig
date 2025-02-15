@@ -164,7 +164,7 @@ pub fn main() !void {
 
     const f = try std.fs.openFileAbsolute(path, .{});
 
-    const bytes = try f.readToEndAlloc(allocator, std.math.maxInt(u64));
+    const bytes = try f.readToEndAlloc(allocator, std.math.maxInt(usize));
     defer allocator.free(bytes);
     var table = try Table.fromArrow(allocator, "test", bytes);
     defer table.deinit();

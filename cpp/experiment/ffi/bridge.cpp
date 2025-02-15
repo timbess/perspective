@@ -3,11 +3,11 @@
 #include <arrow/table.h>
 #include <arrow/array/array_binary.h>
 #include <arrow/array/array_primitive.h>
-#include <iostream>
+// #include <iostream>
 #include <memory>
 #include "bridge.h"
 #include "arrow/array/array_dict.h"
-#include "arrow/io/buffered.h"
+// #include "arrow/io/buffered.h"
 #include "arrow/type.h"
 #include "arrow/type_fwd.h"
 
@@ -22,7 +22,7 @@ ColumnType(OpaqueArrow* arrow, const char* column) {
     const auto col = arrow->table->GetColumnByName(column);
     if (!col) {}
 
-    std::fputs("Unknown column type", stderr);
+    // std::fputs("Unknown column type", stderr);
     std::abort();
 }
 
@@ -52,7 +52,7 @@ GetDictColumn(
         std::shared_ptr<arrow::StringArray> dict =
             std::static_pointer_cast<arrow::StringArray>(scol->dictionary());
         if (!scol) {
-            std::fputs("Column is not a dictionary array", stderr);
+            // std::fputs("Column is not a dictionary array", stderr);
             std::abort();
             return;
         }
@@ -99,9 +99,10 @@ GetDictColumn(
                 break;
             }
             default:
-                std::cerr << "Unsupported index type in dictionary column: "
-                          << icol->type()->ToString() << " " << icol->type_id()
-                          << '\n';
+                // std::cerr << "Unsupported index type in dictionary column: "
+                //           << icol->type()->ToString() << " " <<
+                //           icol->type_id()
+                //           << '\n';
                 std::abort();
         }
     }
@@ -226,7 +227,7 @@ ReadInto(OpaqueArrow* arrow, const char* column, void* out_data, size_t len) {
                 break;
             }
             default:
-                std::fputs("Unknown Type", stderr);
+                // std::fputs("Unknown Type", stderr);
                 std::abort();
                 break;
         }
@@ -240,14 +241,14 @@ InitArrow(const unsigned char* data, size_t data_len) {
 
     if (!reader.ok()) {
         const auto& status = reader.status();
-        std::cerr << "ERROR1: " << status.ToString();
+        // std::cerr << "ERROR1: " << status.ToString();
     }
 
     auto table = (*reader)->ToTable();
 
     if (!table.ok()) {
         const auto& status = table.status();
-        std::cerr << "ERROR2: " << status.ToString();
+        // std::cerr << "ERROR2: " << status.ToString();
     }
 
     return new OpaqueArrow{.table = *table};
@@ -338,7 +339,8 @@ ReadColumns(struct OpaqueArrow* arrow, struct Field* out) {
             case arrow::Type::DECIMAL32:
             case arrow::Type::DECIMAL64:
             case arrow::Type::MAX_ID:
-                std::cerr << "Unsupported type: " << field->type()->ToString();
+                // std::cerr << "Unsupported type: " <<
+                // field->type()->ToString();
                 std::abort();
         }
         out[i] = Field{.name = field->name().c_str(), .dtype = type};
