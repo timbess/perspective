@@ -35,7 +35,7 @@ set_property(TARGET experiment PROPERTY
              IMPORTED_LOCATION "${CMAKE_SOURCE_DIR}/zig-out/lib/libexperiment.a")
 add_dependencies(experiment zig_build)
 
-add_executable(my_wasm null.cpp)
+add_executable(my_wasm wasm.cpp)
 target_link_libraries(my_wasm PRIVATE bridge experiment arrow lz4)
 target_include_directories(my_wasm PRIVATE "${CMAKE_SOURCE_DIR}/mock_zig_headers")
 target_include_directories(my_wasm PRIVATE "${CMAKE_SOURCE_DIR}/.zig-cache")
