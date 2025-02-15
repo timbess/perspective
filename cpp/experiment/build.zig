@@ -142,8 +142,6 @@ pub fn build(b: *std.Build) !void {
         .optimize = optimize,
     });
 
-    // lib_unit_tests.linkLibC();
-
     for (arrow_includes) |path| {
         lib_unit_tests.addSystemIncludePath(b.path(path));
     }
