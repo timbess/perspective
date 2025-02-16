@@ -1,5 +1,6 @@
 const std = @import("std");
 const root = @import("root.zig");
+const BitVector = @import("bitvector.zig").BitVector;
 
 const Dtype = root.Dtype;
 const Scalar = root.Scalar;
@@ -82,14 +83,21 @@ pub fn ColumnVtable(comptime dtype: Dtype) type {
     };
 }
 
-const ValueStatus = enum {
+pub const ValueStatus = enum(u1) { defined, null };
+pub const DeltaStatus = enum(u2) {
     defined,
-    undefined,
     null,
+    undefined,
 };
 
 test {
-    try std.testing.expectEqual(1, @sizeOf(ValueStatus));
+    try std.testing.expectEqual(1, @typeInfo(@typeInfo(ValueStatus).Enum.tag_type).Int.bits);
+    try std.testing.expectEqual(2, @typeInfo(@typeInfo(DeltaStatus).Enum.tag_type).Int.bits);
+
+    inline for (std.meta.fields(ValueStatus)) |v| {
+        const delta_field = std.meta.stringToEnum(DeltaStatus, v.name).?;
+        try std.testing.expectEqual(v.value, @intFromEnum(delta_field));
+    }
 }
 
 /// A generic column type for scalar values. This is a template that should be instantiated with a specific Dtype.
@@ -102,7 +110,7 @@ pub fn ScalarColumn(comptime dtype: Dtype) type {
         name: []const u8,
         dtype: Dtype,
         data: std.ArrayListUnmanaged(dtype.underlying()),
-        nulls: std.ArrayListUnmanaged(ValueStatus),
+        nulls: Nulls,
         allocator: std.mem.Allocator,
 
         const Self = @This();
@@ -113,7 +121,7 @@ pub fn ScalarColumn(comptime dtype: Dtype) type {
                 .name = try allocator.dupe(u8, name),
                 .dtype = dtype,
                 .data = std.ArrayListUnmanaged(dtype.underlying()){},
-                .nulls = std.ArrayListUnmanaged(ValueStatus){},
+                .nulls = Nulls.init(allocator),
                 .allocator = allocator,
             };
         }
@@ -121,7 +129,7 @@ pub fn ScalarColumn(comptime dtype: Dtype) type {
         pub fn deinit(self: *Self) void {
             self.allocator.free(self.name);
             self.data.deinit(self.allocator);
-            self.nulls.deinit(self.allocator);
+            self.nulls.deinit();
         }
 
         pub fn ensureSize(self: *Self, capacity: usize) !void {
@@ -222,11 +230,86 @@ test "Vocab must deduplicate strings" {
     try std.testing.expectEqualStrings("hello", index2);
 }
 
+const Nulls = struct {
+    const BitVectorType = BitVector(@typeInfo(ValueStatus).Enum.tag_type);
+    nulls: BitVectorType,
+
+    const Self = @This();
+
+    pub fn init(allocator: std.mem.Allocator) Self {
+        return Self{
+            .nulls = try BitVectorType.init(allocator),
+        };
+    }
+
+    pub fn deinit(self: *Self) void {
+        self.nulls.deinit();
+    }
+
+    pub fn deleteLastN(self: *Self, num: usize) void {
+        self.nulls.deleteLastN(num);
+    }
+
+    pub fn backFillDefined(self: *Self, cap: usize) std.mem.Allocator.Error!void {
+        try self.nulls.appendNTimes(@intFromEnum(ValueStatus.defined), cap);
+    }
+
+    pub fn append(self: *Self, status: ValueStatus) std.mem.Allocator.Error!void {
+        try self.nulls.append(@intFromEnum(status));
+    }
+
+    pub fn appendAt(self: *Self, idx: usize, status: ValueStatus) std.mem.Allocator.Error!void {
+        if (idx > self.nulls.elementCount) {
+            try self.backFillDefined(idx - self.nulls.elementCount);
+        }
+        try self.append(status);
+    }
+
+    pub inline fn setStatus(self: *Self, idx: usize, status: ValueStatus) void {
+        self.nulls.set(idx, @intFromEnum(status));
+    }
+
+    pub inline fn getStatus(self: *Self, idx: usize) ValueStatus {
+        return @enumFromInt(self.nulls.get(idx));
+    }
+
+    pub inline fn size(self: *Self) usize {
+        return self.nulls.elementCount;
+    }
+};
+
+test "Nulls backfills defined values when appended mid-list" {
+    var nulls = Nulls.init(std.testing.allocator);
+    defer nulls.deinit();
+
+    try nulls.appendAt(100, .null);
+
+    try std.testing.expectEqual(101, nulls.size());
+    try std.testing.expectEqual(.null, nulls.getStatus(100));
+    // for (nulls.nulls.items[0..100]) |s| {
+    for (0..100) |i| {
+        try std.testing.expectEqual(.defined, nulls.getStatus(i));
+    }
+}
+
+test "Nulls at index 0 work" {
+    var nulls = Nulls.init(std.testing.allocator);
+    defer nulls.deinit();
+
+    try std.testing.expectEqual(0, nulls.size());
+
+    try nulls.appendAt(0, .null);
+
+    try std.testing.expectEqual(1, nulls.size());
+    try std.testing.expectEqual(.null, nulls.getStatus(0));
+}
+
 /// A column that stores string values as a Vocab of unique strings combined with a list of
 /// fat pointers into the Vocab. This is especially efficient for datasets with many repeated strings.
 pub const StringColumn = struct {
     name: []const u8,
     data: std.ArrayList([]const u8),
+    nulls: Nulls,
     vocab: Vocab,
 
     const Self = @This();
@@ -240,6 +323,7 @@ pub const StringColumn = struct {
         return Self{
             .name = try allocator.dupe(u8, name),
             .data = data,
+            .nulls = Nulls.init(allocator),
             .vocab = vocab,
         };
     }
@@ -250,9 +334,24 @@ pub const StringColumn = struct {
         self.vocab.deinit();
     }
 
-    pub fn append(self: *Self, str: []const u8) !void {
-        const interned_str = try self.vocab.intern(str);
-        try self.data.append(interned_str);
+    pub fn append(self: *Self, str: ?[]const u8) !void {
+        if (str != null) {
+            const interned_str = try self.vocab.intern(str.?);
+            try self.data.append(interned_str);
+        } else {
+            // Only deal with nulls on the first occurence.
+            if (self.nulls.size() > 0) {
+                try self.nulls.append(.null);
+                errdefer self.nulls.deleteLastN(1);
+                try self.data.append("");
+            } else {
+                try self.nulls.backFillDefined(self.data.items.len);
+                errdefer self.nulls.deleteLastN(self.data.items.len);
+                try self.nulls.append(.null);
+                errdefer self.nulls.deleteLastN(1);
+                try self.data.append("");
+            }
+        }
     }
 
     pub fn appendScalar(self: *Self, scalar: Scalar) !void {

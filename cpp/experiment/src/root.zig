@@ -235,4 +235,5 @@ test {
     _ = @import("columns.zig");
     _ = @import("table.zig");
     _ = @import("arrow.zig");
+    _ = @import("bitvector.zig");
 }
