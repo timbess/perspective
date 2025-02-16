@@ -231,14 +231,13 @@ test "Vocab must deduplicate strings" {
 }
 
 const Nulls = struct {
-    const BitVectorType = BitVector(@typeInfo(ValueStatus).Enum.tag_type);
-    nulls: BitVectorType,
+    nulls: BitVector(ValueStatus),
 
     const Self = @This();
 
     pub fn init(allocator: std.mem.Allocator) Self {
         return Self{
-            .nulls = try BitVectorType.init(allocator),
+            .nulls = try BitVector(ValueStatus).init(allocator),
         };
     }
 
@@ -251,11 +250,11 @@ const Nulls = struct {
     }
 
     pub fn backFillDefined(self: *Self, cap: usize) std.mem.Allocator.Error!void {
-        try self.nulls.appendNTimes(@intFromEnum(ValueStatus.defined), cap);
+        try self.nulls.appendNTimes(.defined, cap);
     }
 
     pub fn append(self: *Self, status: ValueStatus) std.mem.Allocator.Error!void {
-        try self.nulls.append(@intFromEnum(status));
+        try self.nulls.append(status);
     }
 
     pub fn appendAt(self: *Self, idx: usize, status: ValueStatus) std.mem.Allocator.Error!void {
@@ -266,11 +265,11 @@ const Nulls = struct {
     }
 
     pub inline fn setStatus(self: *Self, idx: usize, status: ValueStatus) void {
-        self.nulls.set(idx, @intFromEnum(status));
+        self.nulls.set(idx, status);
     }
 
     pub inline fn getStatus(self: *Self, idx: usize) ValueStatus {
-        return @enumFromInt(self.nulls.get(idx));
+        return self.nulls.get(idx);
     }
 
     pub inline fn size(self: *Self) usize {

@@ -2,10 +2,9 @@ const std = @import("std");
 
 pub fn BitVector(comptime T: type) type {
     const typeInfo = @typeInfo(T);
-    const bits: u16 = switch (typeInfo) {
-        .Int => |i| i.bits,
-        // TODO: wrapping/unwrapping the tags is annoying so I didn't implement it yet, but it'd be nice to have.
-        // .Enum => |e| @typeInfo(e.tag_type).Int.bits,
+    const bits: u16, const underlying: type = switch (typeInfo) {
+        .Int => |i| .{ i.bits, T },
+        .Enum => |e| .{ @typeInfo(e.tag_type).Int.bits, e.tag_type },
         else => @compileError("Unsupported BitVector type: " ++ @typeName(T)),
     };
     const elementsPerByte: usize = 8 / bits;
@@ -35,10 +34,25 @@ pub fn BitVector(comptime T: type) type {
         }
 
         fn calculateBitOffset(index: usize) usize {
-            const elemsPerByte = elementsPerByte;
-            const group = index / elemsPerByte;
-            const posInGroup = @mod(index, elemsPerByte);
+            const group = index / elementsPerByte;
+            const posInGroup = @mod(index, elementsPerByte);
             return group * 8 + posInGroup * bits;
+        }
+
+        fn fromEnum(value: T) underlying {
+            switch (@typeInfo(T)) {
+                .Enum => return @intFromEnum(value),
+                .Int => return value,
+                else => @compileError("Unsupported type for BitVector element"),
+            }
+        }
+
+        fn toEnum(value: underlying) T {
+            switch (@typeInfo(T)) {
+                .Enum => return @enumFromInt(value),
+                .Int => return value,
+                else => @compileError("Unsupported type for BitVector element"),
+            }
         }
 
         /// Returns the number of elements stored.
@@ -74,12 +88,13 @@ pub fn BitVector(comptime T: type) type {
             var saturatedByte: u8 = 0;
             inline for (0..elementsPerByte) |i| {
                 const offset: std.math.Log2Int(u8) = comptime @intCast(@mod(calculateBitOffset(i), 8));
-                saturatedByte |= (@as(u8, @intCast(value)) << @intCast(offset));
+                saturatedByte |= (@as(u8, @intCast(fromEnum(value))) << @intCast(offset));
             }
+            // memset the middle bytes.
             try self.data.appendNTimes(saturatedByte, endByte - startByte);
             self.elementCount += elementsPerByte * (endByte - startByte);
 
-            // Handle not being byte aligned at the end.
+            // Again handling non-byte aligned bits at the end.
             for (0..remainingBitLen) |_| {
                 try self.append(value);
             }
@@ -102,7 +117,7 @@ pub fn BitVector(comptime T: type) type {
 
             const mask = @as(u8, (1 << bits) - 1) << bitIndex;
             self.data.items[byteIndex] &= ~mask;
-            self.data.items[byteIndex] |= (@as(u8, value) & ((1 << bits) - 1)) << bitIndex;
+            self.data.items[byteIndex] |= (@as(u8, fromEnum(value)) & ((1 << bits) - 1)) << bitIndex;
             self.elementCount += 1;
         }
 
@@ -111,7 +126,7 @@ pub fn BitVector(comptime T: type) type {
             const byteIndex = bitOffset / 8;
             const bitIndex: std.math.Log2Int(u8) = @intCast(@mod(bitOffset, 8));
             const result: u8 = (self.data.items[byteIndex] >> bitIndex) & ((1 << bits) - 1);
-            return @intCast(result);
+            return toEnum(@intCast(result));
         }
 
         pub fn set(self: *Self, index: usize, value: T) void {
@@ -120,7 +135,7 @@ pub fn BitVector(comptime T: type) type {
             const bitIndex: std.math.Log2Int(u8) = @intCast(@mod(bitOffset, 8));
             const mask = @as(u8, (1 << bits) - 1) << bitIndex;
             self.data.items[byteIndex] &= ~mask;
-            self.data.items[byteIndex] |= (@as(u8, value) & ((1 << bits) - 1)) << bitIndex;
+            self.data.items[byteIndex] |= (@as(u8, fromEnum(value)) & ((1 << bits) - 1)) << bitIndex;
         }
     };
 }
@@ -131,9 +146,14 @@ pub fn BitVector(comptime T: type) type {
 // ==============================
 //
 
-// These tests assume that you have defined custom types like u3 and u4
-// that represent unsigned integers with 3 or 4 bits respectively.
-// For the purpose of these tests, we’ll assume such types are available.
+test "BitVector enum elements" {
+    const Foo = enum { foo, bar };
+    var bv = try BitVector(Foo).init(std.testing.allocator);
+    defer bv.deinit();
+
+    try bv.append(.foo);
+    try bv.append(.bar);
+}
 
 test "BitVector push and get with 3-bit elements" {
     var bv = try BitVector(u3).init(std.testing.allocator);
@@ -344,18 +364,7 @@ fn fuzzTest(comptime T: type, rngSeed: u64, count: usize) !void {
     }
 }
 
-//
-// ==============================
-//  TESTS FOR appendNTimes BELOW
-// ==============================
-//
-// (These tests assume that you’ve defined custom types such as u1, u2, u3, u4, and u7.
-//  For testing purposes, you can imagine these are simply aliases for unsigned integers
-//  constrained to the appropriate bit-width.)
-//
-
 test "appendNTimes on empty vector (aligned count, u2)" {
-    // For u2, valid values: 0..3, and elementsPerByte = 8 / 2 = 4.
     var bv = try BitVector(u2).init(std.testing.allocator);
     defer bv.deinit();
 
@@ -369,7 +378,6 @@ test "appendNTimes on empty vector (aligned count, u2)" {
 }
 
 test "appendNTimes on empty vector (non-aligned count, u2)" {
-    // For u2, elementsPerByte = 4.
     var bv = try BitVector(u2).init(std.testing.allocator);
     defer bv.deinit();
 
