@@ -20,8 +20,33 @@ pub const ColumnSlice = struct {
     status: std.ArrayList(columns.DeltaStatus),
 };
 
+pub const PrimaryKey = struct {
+    column: Column,
+
+    pub fn init(allocator: std.mem.Allocator, name: []const u8) !PrimaryKey {
+        const pkey_column = try allocator.create(columns.ScalarColumn(Dtype.u32));
+        pkey_column.* = try columns.ScalarColumn(Dtype.u32).init(allocator, name);
+        return PrimaryKey{
+            .column = pkey_column.toColumn(),
+        };
+    }
+
+    pub fn deinit(self: *PrimaryKey, allocator: std.mem.Allocator) void {
+        self.column.deinit(allocator);
+    }
+
+    pub fn initExistingColumn(column: Column) PrimaryKey {
+        return PrimaryKey{
+            .column = column,
+        };
+    }
+};
+
+pub const DEFAULT_PKEY_NAME = "psp_pkey";
+
 pub const Table = struct {
     name: []const u8,
+    primary_key: PrimaryKey,
     columns: std.ArrayListUnmanaged(Column),
     name_mapping: std.StringHashMapUnmanaged(Column),
     schema: Schema,
@@ -37,6 +62,10 @@ pub const Table = struct {
     }
 
     pub fn init(allocator: std.mem.Allocator, name: []const u8, schema: Schema) !Self {
+        return initWithIndex(allocator, name, schema, DEFAULT_PKEY_NAME);
+    }
+
+    pub fn initWithIndex(allocator: std.mem.Allocator, name: []const u8, schema: Schema, index: []const u8) !Self {
         var cols = try std.ArrayListUnmanaged(Column).initCapacity(allocator, schema.fields.items.len);
         var name_mapping = std.StringHashMapUnmanaged(Column){};
         try name_mapping.ensureTotalCapacity(allocator, @truncate(schema.fields.items.len));
@@ -57,8 +86,24 @@ pub const Table = struct {
             }
         }
 
+        const pkey = blk: {
+            if (name_mapping.get(index)) |c| {
+                break :blk PrimaryKey.initExistingColumn(c);
+            } else {
+                const res = try PrimaryKey.init(allocator, DEFAULT_PKEY_NAME);
+                // errdefer res.deinit();
+
+                // try name_mapping.put(allocator, index, res.column);
+                // errdefer _ = name_mapping.remove(index);
+
+                // try cols.append(res.column);
+                break :blk res;
+            }
+        };
+
         return Self{
             .name = try allocator.dupe(u8, name),
+            .primary_key = pkey,
             .columns = cols,
             .name_mapping = name_mapping,
             .schema = schema,
@@ -71,17 +116,9 @@ pub const Table = struct {
         self.schema.deinit();
         self.allocator.free(self.name);
         for (self.columns.items) |*col| {
-            const ptr = col.ptr;
-            const dtype = col.dtype;
-            col.deinit();
-            switch (dtype) {
-                inline else => |dt| {
-                    const ColType = dt.coltype();
-                    const col_ptr: *ColType = @ptrCast(@alignCast(ptr));
-                    self.allocator.destroy(col_ptr);
-                },
-            }
+            col.deinit(self.allocator);
         }
+        self.primary_key.deinit(self.allocator);
         self.columns.deinit(self.allocator);
         self.name_mapping.deinit(self.allocator);
     }
@@ -105,6 +142,13 @@ pub const Table = struct {
     }
 
     inline fn appendRowUnchecked(self: *Self, row: []const Scalar) !void {
+        const old_size = self.size;
+        // Cleanup partial writes.
+        errdefer {
+            for (self.columns.items) |*col| {
+                col.truncateToSize(old_size);
+            }
+        }
         for (self.columns.items, row) |*col, scalar| {
             try col.append(scalar);
         }

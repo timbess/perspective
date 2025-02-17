@@ -18,6 +18,7 @@ pub const Column = struct {
     nullCountFn: *const fn (*anyopaque) usize,
     sizeFn: *const fn (*anyopaque) usize,
     deinitFn: *const fn (*anyopaque) void,
+    truncateToSizeFn: *const fn (*anyopaque, usize) void,
     dtype: Dtype,
 
     const Self = @This();
@@ -31,11 +32,23 @@ pub const Column = struct {
             .nullCountFn = vtable.nullCount,
             .sizeFn = vtable.size,
             .deinitFn = vtable.deinit,
+            .truncateToSizeFn = vtable.truncateToSize,
             .dtype = dtype,
         };
     }
 
-    pub fn deinit(self: *Self) void {
+    pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
+        self.deinitColumn();
+        switch (self.dtype) {
+            inline else => |dt| {
+                const ColType = dt.coltype();
+                const col_ptr: *ColType = @ptrCast(@alignCast(self.ptr));
+                allocator.destroy(col_ptr);
+            },
+        }
+    }
+
+    pub fn deinitColumn(self: *Self) void {
         self.deinitFn(self.ptr);
     }
 
@@ -49,6 +62,10 @@ pub const Column = struct {
 
     pub fn nullCount(self: *Self) usize {
         return self.nullCountFn(self.ptr);
+    }
+
+    pub fn truncateToSize(self: *Self, max_size: usize) void {
+        self.truncateToSizeFn(self.ptr, max_size);
     }
 
     pub fn size(self: *const Self) usize {
@@ -81,6 +98,11 @@ pub fn ColumnVtable(comptime dtype: Dtype) type {
         fn nullCount(self: *anyopaque) usize {
             const column: *ColType = @ptrCast(@alignCast(self));
             return column.nullCount();
+        }
+
+        fn truncateToSize(self: *anyopaque, max_size: usize) void {
+            const column: *ColType = @ptrCast(@alignCast(self));
+            column.truncateToSize(max_size);
         }
 
         fn size(self: *anyopaque) usize {
@@ -182,6 +204,15 @@ pub fn ScalarColumn(comptime dtype: Dtype) type {
 
         pub fn nullCount(self: *Self) usize {
             return self.nulls.size();
+        }
+
+        pub fn truncateToSize(self: *Self, new_size: usize) void {
+            if (self.data.items.len > new_size) {
+                self.data.shrinkRetainingCapacity(new_size);
+            }
+            if (self.nulls.size() > new_size) {
+                self.nulls.deleteLastN(self.nulls.size() - new_size);
+            }
         }
 
         pub fn size(self: *Self) usize {
@@ -417,6 +448,15 @@ pub const StringColumn = struct {
 
     pub fn nullCount(self: *Self) usize {
         return self.nulls.size();
+    }
+
+    pub fn truncateToSize(self: *Self, new_size: usize) void {
+        if (self.data.items.len > new_size) {
+            self.data.shrinkRetainingCapacity(new_size);
+        }
+        if (self.nulls.size() > new_size) {
+            self.nulls.deleteLastN(self.nulls.size() - new_size);
+        }
     }
 
     pub fn size(self: *Self) usize {

@@ -90,7 +90,7 @@ const Server = struct {
             },
             .get_hosted_tables_req => {
                 const table_resp = pb.GetHostedTablesResp.init(response_allocator);
-                table_resp.table_infos.ensureTotalCapacity(self.tables.count());
+                try table_resp.table_infos.ensureTotalCapacity(self.tables.count());
                 for (self.tables.keys()) |entity_id| {
                     table_resp.table_infos.append(pb.HostedTable{
                         .entity_id = protobuf.ManagedString.managed(entity_id),
@@ -103,9 +103,35 @@ const Server = struct {
             },
             .table_make_port_req => |_| {},
             .table_make_view_req => |_| {},
-            .table_schema_req => |_| {},
-            .table_size_req => |_| {},
-            .table_validate_expr_req => |_| {},
+            .table_schema_req => |_| {
+                const table = self.tables.get(request.entity_id.getSlice()) orelse return error.TableNotFound;
+                const schema_resp = pb.TableSchemaResp.init(response_allocator);
+                const schema = &schema_resp.schema.?;
+                schema.schema.ensureTotalCapacity(table.schema.fields.len);
+                for (table.schema.fields.items) |f| {
+                    try schema.schema.appendAssumeCapacity(pb.Schema.KeyTypePair{ .name = protobuf.ManagedString.managed(f.name), .type = switch (f.dtype) {
+                        .u32 => pb.ColumnType.INTEGER,
+                        .u64 => pb.ColumnType.INTEGER,
+                        .i32 => pb.ColumnType.INTEGER,
+                        .i64 => pb.ColumnType.INTEGER,
+                        .f64 => pb.ColumnType.FLOAT,
+                        .date32 => pb.ColumnType.DATE,
+                        .date64 => pb.ColumnType.DATETIME,
+                        .string => pb.ColumnType.STRING,
+                    } });
+                }
+                lambdas.pushResp(.{ .table_schema_resp = schema_resp });
+            },
+            .table_size_req => |r| {
+                const table = self.tables.get(r.table_name) orelse error.TableNotFound;
+                const table_size_resp = pb.TableSizeResp{ .size = @intCast(table.data.len) };
+                lambdas.pushResp(.{ .table_size_resp = table_size_resp });
+            },
+            .table_validate_expr_req => |_| {
+                const resp = pb.TableValidateExprResp.init(response_allocator);
+                // TODO: unmock
+                lambdas.pushResp(.{ .table_validate_expr_resp = resp });
+            },
             .view_column_paths_req => |_| {},
             .view_delete_req => |_| {},
             .view_dimensions_req => |_| {},
