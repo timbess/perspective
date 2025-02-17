@@ -214,7 +214,7 @@ pub const Dtype = enum {
     }
 };
 
-pub const Scalar = union(Dtype) {
+pub const ScalarValue = union(Dtype) {
     u32: u32,
     u64: u64,
     i32: i32,
@@ -225,8 +225,21 @@ pub const Scalar = union(Dtype) {
     string: []const u8,
 };
 
+pub const Scalar = struct {
+    status: columns.DeltaStatus,
+    inner: ScalarValue,
+
+    pub fn defined(value: ScalarValue) Scalar {
+        return Scalar{
+            .inner = value,
+            .status = .defined,
+        };
+    }
+};
+
 pub const PspError = error{
     InvalidDtype,
+    InvalidStatus,
     InvalidColumnCount,
     ColumnSizeMismatch,
 };

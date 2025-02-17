@@ -11,11 +11,13 @@ const Field = root.Field;
 
 pub const Schema = root.Schema;
 pub const Scalar = root.Scalar;
+pub const ScalarValue = root.ScalarValue;
 
-const ScalarArray = std.MultiArrayList(Scalar);
+const ScalarArray = std.MultiArrayList(ScalarValue);
 pub const ColumnSlice = struct {
     column_name: []const u8,
     data: ScalarArray,
+    status: std.ArrayList(columns.DeltaStatus),
 };
 
 pub const Table = struct {
@@ -123,6 +125,13 @@ pub const Table = struct {
         self.assertSizeOfAllColumns();
     }
 
+    pub fn appendRowsComp(self: *Self, rows: anytype) !void {
+        for (rows) |row| {
+            try self.appendRow(&row);
+        }
+        self.assertSizeOfAllColumns();
+    }
+
     /// Slice rows from the table. Probably smart to use an Arena allocator here.
     pub fn sliceRows(self: *Self, allocator: std.mem.Allocator, rstart: usize, rend: usize) ![]ColumnSlice {
         if (rstart > rend or rend > self.size) {
@@ -134,17 +143,27 @@ pub const Table = struct {
             r.* = ColumnSlice{
                 .column_name = field.name,
                 .data = ScalarArray{},
+                .status = std.ArrayList(columns.DeltaStatus).init(allocator),
             };
             try r.data.ensureTotalCapacity(allocator, row_count);
             std.log.debug("column: {s}, dtype: {s}", .{ field.name, @tagName(field.dtype) });
         }
         for (self.columns.items, result) |*col, *r| {
+            const null_count = col.nullCount();
+            if (null_count > 0) {
+                try r.status.ensureTotalCapacity(row_count);
+                r.status.items.len = row_count;
+            }
             switch (col.dtype) {
                 inline else => |dtype| {
                     const ColType = dtype.coltype();
                     const typed_col: *ColType = try col.reflect(dtype);
 
-                    // const col_size = typed_col.size();
+                    if (null_count > 0) {
+                        for (rstart..rend, 0..) |i, dst_i| {
+                            r.status.items[dst_i] = @enumFromInt(@intFromEnum(typed_col.nulls.getStatus(i)));
+                        }
+                    }
 
                     r.data.len = row_count;
                     var dst = r.data.slice().items(ScalarArray.Field.data);
@@ -189,13 +208,20 @@ test "table slices" {
     var table = try Table.init(std.testing.allocator, "test_table", schema);
     defer table.deinit();
 
-    const rows: []const []const Scalar = &[_][]const Scalar{
-        &[_]Scalar{ .{ .u32 = 1 }, .{ .f64 = 1 }, .{ .string = "foo" } },
-        &[_]Scalar{ .{ .u32 = 2 }, .{ .f64 = 2 }, .{ .string = "bar" } },
-        &[_]Scalar{ .{ .u32 = 3 }, .{ .f64 = 3 }, .{ .string = "baz" } },
+    // const rows: []const []const Scalar = &[_][]const Scalar{
+    const rows_values: []const []const ScalarValue = &[_][]const ScalarValue{
+        &[_]ScalarValue{ .{ .u32 = 1 }, .{ .f64 = 1 }, .{ .string = "foo" } },
+        &[_]ScalarValue{ .{ .u32 = 2 }, .{ .f64 = 2 }, .{ .string = "bar" } },
+        &[_]ScalarValue{ .{ .u32 = 3 }, .{ .f64 = 3 }, .{ .string = "baz" } },
     };
+    var rows: [3][3]Scalar = undefined;
+    for (rows_values, 0..) |row_values, row| {
+        for (row_values, 0..) |value, col| {
+            rows[row][col] = Scalar.defined(value);
+        }
+    }
 
-    try table.appendRows(rows);
+    try table.appendRowsComp(rows);
 
     try std.testing.expectEqual(table.size, 3);
 
@@ -213,10 +239,10 @@ test "table slices" {
             const data = col.data.get(rowi);
             switch (data) {
                 .string => {
-                    try std.testing.expectEqualStrings(rows[rowi][coli].string, data.string);
+                    try std.testing.expectEqualStrings(rows[rowi][coli].inner.string, data.string);
                 },
                 else => {
-                    try std.testing.expectEqual(rows[rowi][coli], data);
+                    try std.testing.expectEqual(rows[rowi][coli].inner, data);
                 },
             }
         }
@@ -239,7 +265,7 @@ test "table creation and destruction" {
 
     var col = table.getColumn("id").?;
     for (0..col.size()) |i| {
-        try col.append(Scalar{ .u32 = @truncate(i) });
+        try col.append(Scalar.defined(.{ .u32 = @truncate(i) }));
     }
 
     var reflected_col = try col.reflect(Dtype.u32);

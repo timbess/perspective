@@ -37,6 +37,10 @@ void ReadInto(
     struct OpaqueArrow* arrow, const char* column, void* out_data, size_t len
 );
 
+void ReadNullsInto(
+    struct OpaqueArrow* arrow, const char* column, void* out_data, size_t len
+);
+
 void ReadColumns(struct OpaqueArrow* arrow, struct Field* out);
 
 int NumChunks(struct OpaqueArrow* arrow, const char* column_name);
@@ -50,6 +54,7 @@ void GetDictColumn(
 size_t TableColumns(struct OpaqueArrow* arrow);
 
 size_t TableSize(struct OpaqueArrow* arrow);
+size_t ColumnNullCount(struct OpaqueArrow* arrow, const char* name);
 
 struct OpaqueArrow* InitArrow(const unsigned char* data, size_t data_len);
 void FreeArrow(struct OpaqueArrow* out);

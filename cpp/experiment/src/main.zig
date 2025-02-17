@@ -160,7 +160,7 @@ pub fn main() !void {
     const stdout = bw.writer();
 
     var path_buffer: [std.fs.MAX_PATH_BYTES]u8 = undefined;
-    const path = try std.fs.realpath("./src/superstore.lz4.arrow", &path_buffer);
+    const path = try std.fs.realpath("./src/test_nulls.arrow", &path_buffer);
 
     const f = try std.fs.openFileAbsolute(path, .{});
 
@@ -171,15 +171,29 @@ pub fn main() !void {
 
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
-    const columns = try table.sliceRows(arena.allocator(), 0, 3);
+    const columns = try table.sliceRows(arena.allocator(), 0, 6);
 
     for (columns) |*c| {
         try stdout.print("Col: {s}\n", .{c.column_name});
+        try stdout.print("ColSize: {d}\n", .{c.data.len});
+        const has_nulls = c.status.items.len > 0;
         for (0..c.data.len) |i| {
             const scalar = c.data.get(i);
-            switch (scalar) {
-                .string => |s| try stdout.print("{s}\n", .{s}),
-                inline else => |s| try stdout.print("{any}\n", .{s}),
+            var ds: column.DeltaStatus = .defined;
+            if (has_nulls) {
+                ds = c.status.items[i];
+            }
+
+            switch (ds) {
+                .defined => {
+                    switch (scalar) {
+                        .string => |s| try stdout.print("{s}\n", .{s}),
+                        inline else => |s| try stdout.print("{any}\n", .{s}),
+                    }
+                },
+                inline else => |s| {
+                    try stdout.print(@tagName(s) ++ "\n", .{});
+                },
             }
         }
     }

@@ -35,6 +35,7 @@ pub fn build(b: *std.Build) !void {
         .target = target,
         .optimize = optimize,
     });
+    exe.addCSourceFile(.{ .file = b.path("ffi/bridge.cpp") });
 
     if (target.query.os_tag == .emscripten) {
         const emsdk_path = std.posix.getenv("EMSDK").?;
@@ -97,7 +98,7 @@ pub fn build(b: *std.Build) !void {
     // standard location when the user invokes the "install" step (the default
     // step when running `zig build`).
     if (target.result.os.tag != .emscripten) {
-        // b.installArtifact(exe);
+        b.installArtifact(exe);
     }
     // This is segfaulting zig lol
     // _ = lib.getEmittedH();

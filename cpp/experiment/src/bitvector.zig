@@ -60,9 +60,9 @@ pub fn BitVector(comptime T: type) type {
             return self.elementCount;
         }
 
-        pub fn ensureCapacity(self: *Self, cap: usize) std.mem.Allocator.Error!void {
+        pub fn ensureCapacity(self: *Self, cap: usize) !void {
             const bitOffset: usize = calculateBitOffset(self.elementCount + cap);
-            const byteIndex: usize = bitOffset / 8;
+            const byteIndex: usize = try std.math.divCeil(usize, bitOffset, 8);
             try self.data.ensureTotalCapacity(byteIndex);
         }
 

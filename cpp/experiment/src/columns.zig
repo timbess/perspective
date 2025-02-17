@@ -4,6 +4,7 @@ const BitVector = @import("bitvector.zig").BitVector;
 
 const Dtype = root.Dtype;
 const Scalar = root.Scalar;
+const ScalarValue = root.ScalarValue;
 const PspError = root.PspError;
 
 /// Type erased column, useful for cases where we have heterogeneous sets of columns.
@@ -14,6 +15,7 @@ pub const Column = struct {
     name: []const u8,
     appendScalarFn: *const fn (*anyopaque, Scalar) anyerror!void,
     getScalarFn: *const fn (*anyopaque, usize) ?Scalar,
+    nullCountFn: *const fn (*anyopaque) usize,
     sizeFn: *const fn (*anyopaque) usize,
     deinitFn: *const fn (*anyopaque) void,
     dtype: Dtype,
@@ -26,6 +28,7 @@ pub const Column = struct {
             .name = name,
             .appendScalarFn = vtable.appendScalar,
             .getScalarFn = vtable.getScalar,
+            .nullCountFn = vtable.nullCount,
             .sizeFn = vtable.size,
             .deinitFn = vtable.deinit,
             .dtype = dtype,
@@ -42,6 +45,10 @@ pub const Column = struct {
 
     pub fn getScalar(self: *Self, index: usize) ?Scalar {
         return self.getScalarFn(self.ptr, index);
+    }
+
+    pub fn nullCount(self: *Self) usize {
+        return self.nullCountFn(self.ptr);
     }
 
     pub fn size(self: *const Self) usize {
@@ -71,6 +78,11 @@ pub fn ColumnVtable(comptime dtype: Dtype) type {
             return column.getScalar(index);
         }
 
+        fn nullCount(self: *anyopaque) usize {
+            const column: *ColType = @ptrCast(@alignCast(self));
+            return column.nullCount();
+        }
+
         fn size(self: *anyopaque) usize {
             const column: *ColType = @ptrCast(@alignCast(self));
             return column.size();
@@ -83,10 +95,10 @@ pub fn ColumnVtable(comptime dtype: Dtype) type {
     };
 }
 
-pub const ValueStatus = enum(u1) { defined, null };
+pub const ValueStatus = enum(u1) { null, defined };
 pub const DeltaStatus = enum(u2) {
-    defined,
     null,
+    defined,
     undefined,
 };
 
@@ -146,8 +158,8 @@ pub fn ScalarColumn(comptime dtype: Dtype) type {
         }
 
         pub fn appendScalar(self: *Self, value: Scalar) !void {
-            if (@intFromEnum(dtype) == @intFromEnum(value)) {
-                try self.data.append(self.allocator, @field(value, @tagName(dtype)));
+            if (@intFromEnum(dtype) == @intFromEnum(value.inner)) {
+                try self.data.append(self.allocator, @field(value.inner, @tagName(dtype)));
             } else {
                 return PspError.InvalidDtype;
             }
@@ -155,7 +167,21 @@ pub fn ScalarColumn(comptime dtype: Dtype) type {
 
         pub fn getScalar(self: *Self, index: usize) ?Scalar {
             if (index >= self.data.items.len) return null;
-            return @unionInit(Scalar, @tagName(dtype), self.data.items[index]);
+            const inner = @unionInit(ScalarValue, @tagName(dtype), self.data.items[index]);
+            if (self.nulls.size() > 0) {
+                return Scalar{
+                    .inner = inner,
+                    .status = @enumFromInt(@intFromEnum(self.nulls.getStatus(index))),
+                };
+            }
+            return Scalar{
+                .inner = inner,
+                .status = .defined,
+            };
+        }
+
+        pub fn nullCount(self: *Self) usize {
+            return self.nulls.size();
         }
 
         pub fn size(self: *Self) usize {
@@ -249,7 +275,7 @@ const Nulls = struct {
         self.nulls.deleteLastN(num);
     }
 
-    pub fn backFillDefined(self: *Self, cap: usize) std.mem.Allocator.Error!void {
+    pub fn backFillDefined(self: *Self, cap: usize) !void {
         try self.nulls.appendNTimes(.defined, cap);
     }
 
@@ -257,7 +283,7 @@ const Nulls = struct {
         try self.nulls.append(status);
     }
 
-    pub fn appendAt(self: *Self, idx: usize, status: ValueStatus) std.mem.Allocator.Error!void {
+    pub fn appendAt(self: *Self, idx: usize, status: ValueStatus) !void {
         if (idx > self.nulls.elementCount) {
             try self.backFillDefined(idx - self.nulls.elementCount);
         }
@@ -331,6 +357,7 @@ pub const StringColumn = struct {
         self.data.allocator.free(self.name);
         self.data.deinit();
         self.vocab.deinit();
+        self.nulls.deinit();
     }
 
     pub fn append(self: *Self, str: ?[]const u8) !void {
@@ -354,8 +381,14 @@ pub const StringColumn = struct {
     }
 
     pub fn appendScalar(self: *Self, scalar: Scalar) !void {
-        switch (scalar) {
-            .string => |str| try self.append(str),
+        switch (scalar.inner) {
+            .string => |str| {
+                switch (scalar.status) {
+                    .defined => try self.append(str),
+                    .null => try self.append(null),
+                    .undefined => return PspError.InvalidStatus,
+                }
+            },
             else => return PspError.InvalidDtype,
         }
     }
@@ -367,13 +400,23 @@ pub const StringColumn = struct {
 
     pub fn getScalar(self: *Self, index: usize) ?Scalar {
         if (self.get(index)) |str| {
-            return Scalar{ .string = str };
+            return Scalar{
+                .inner = .{ .string = str },
+                .status = if (self.nulls.size() > 0)
+                    @enumFromInt(@intFromEnum(self.nulls.getStatus(index)))
+                else
+                    .defined,
+            };
         }
         return null;
     }
 
     pub fn ensureSize(self: *Self, capacity: usize) !void {
         try self.data.ensureTotalCapacity(capacity);
+    }
+
+    pub fn nullCount(self: *Self) usize {
+        return self.nulls.size();
     }
 
     pub fn size(self: *Self) usize {
@@ -409,16 +452,16 @@ test "ScalarColumn scalar methods" {
     defer column.deinit();
 
     for (0..100) |i| {
-        try column.appendScalar(Scalar{ .i32 = @intCast(i) });
+        try column.appendScalar(Scalar.defined(.{ .i32 = @intCast(i) }));
     }
 
     for (0..100) |i| {
-        try std.testing.expectEqual(Scalar{ .i32 = @intCast(i) }, column.getScalar(i));
+        try std.testing.expectEqual(Scalar.defined(.{ .i32 = @intCast(i) }), column.getScalar(i));
     }
 
     try std.testing.expectEqual(100, column.size());
 
-    try std.testing.expectError(PspError.InvalidDtype, column.appendScalar(Scalar{ .f64 = 123.45 }));
+    try std.testing.expectError(PspError.InvalidDtype, column.appendScalar(Scalar.defined(.{ .f64 = 123.45 })));
 }
 
 test "ScalarColumn comptime methods" {
@@ -447,7 +490,7 @@ test "ScalarColumn erasure/reflection" {
     var erased_column: Column = column.toColumn();
 
     for (0..100) |i| {
-        const value: Scalar = .{ .i32 = @intCast(i) };
+        const value: Scalar = Scalar.defined(.{ .i32 = @intCast(i) });
         try std.testing.expectEqual(value, erased_column.getScalar(i));
     }
 
@@ -473,7 +516,7 @@ test "ScalarColumn erasure/reflection with strings" {
     for (0..10) |i| {
         const value: []const u8 = std.fmt.allocPrint(std.testing.allocator, "{}", .{i}) catch unreachable;
         defer std.testing.allocator.free(value);
-        try std.testing.expectEqualStrings(value, erased_column.getScalar(i).?.string);
+        try std.testing.expectEqualStrings(value, erased_column.getScalar(i).?.inner.string);
     }
 
     var reflected_column: *StringColumn = try erased_column.reflect(Dtype.string);
@@ -481,6 +524,6 @@ test "ScalarColumn erasure/reflection with strings" {
     for (0..10) |i| {
         const value: []const u8 = std.fmt.allocPrint(std.testing.allocator, "{}", .{i}) catch unreachable;
         defer std.testing.allocator.free(value);
-        try std.testing.expectEqualStrings(value, reflected_column.getScalar(i).?.string);
+        try std.testing.expectEqualStrings(value, reflected_column.getScalar(i).?.inner.string);
     }
 }

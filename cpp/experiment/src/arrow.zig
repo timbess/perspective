@@ -41,6 +41,10 @@ pub const ArrowTable = struct {
         return arrow_ffi.TableSize(self.table);
     }
 
+    pub fn columnNullCount(self: *Self, name: []const u8) usize {
+        return arrow_ffi.ColumnNullCount(self.table, name.ptr);
+    }
+
     pub fn readFields(self: *Self, out: []arrow_ffi.Field) PspError!void {
         if (out.len != self.numColumns()) {
             return PspError.InvalidColumnCount;
@@ -69,6 +73,10 @@ pub const ArrowTable = struct {
                 @compileError("Only slices or pointers to arrays are accepted. Got: " ++ @typeName(T));
             },
         }
+    }
+
+    pub fn readIntoNull(self: *Self, column: []const u8, out: anytype) void {
+        arrow_ffi.ReadNullsInto(self.table, column.ptr, out.ptr, out.len);
     }
 
     pub fn numChunks(self: *Self, column: []const u8) usize {
@@ -101,6 +109,12 @@ pub const ArrowTable = struct {
                     col_data.* = try ColType.init(allocator, field_name);
                     errdefer col_data.deinit();
                     try col_data.ensureSize(self.numRows());
+
+                    const null_count = self.columnNullCount(field_name);
+                    if (null_count > 0) {
+                        try col_data.nulls.nulls.appendNTimes(.defined, null_count);
+                        self.readIntoNull(field_name, col_data.nulls.nulls.data.items);
+                    }
 
                     col_data.data.items.len = self.numRows();
                     const num_chunks = self.numChunks(field_name);
@@ -143,6 +157,12 @@ pub const ArrowTable = struct {
 
                     col_data.data.items.len = self.numRows();
                     self.readInto(field_name, col_data.data.items);
+
+                    const null_count = self.columnNullCount(field_name);
+                    if (null_count > 0) {
+                        try col_data.nulls.nulls.appendNTimes(.defined, null_count);
+                        self.readIntoNull(field_name, col_data.nulls.nulls.data.items);
+                    }
 
                     try table.addColumn(col_data.toColumn());
                 },
@@ -198,7 +218,10 @@ test "Basic Arrow Functionality" {
     for (data) |d| {
         try std.testing.expectEqualStrings("x", d.column_name);
         for (1..4) |i| {
-            try std.testing.expectEqual(Scalar{ .i32 = @intCast(i) }, d.data.get(i - 1));
+            try std.testing.expectEqual(Scalar.defined(.{ .i32 = @intCast(i) }), Scalar{
+                .inner = d.data.get(i - 1),
+                .status = if (d.status.items.len > 0) d.status.items[i - 1] else .defined,
+            });
         }
     }
 }

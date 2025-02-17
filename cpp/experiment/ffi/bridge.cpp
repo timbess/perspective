@@ -4,6 +4,7 @@
 #include <arrow/array/array_binary.h>
 #include <arrow/array/array_primitive.h>
 // #include <iostream>
+#include <cstdint>
 #include <memory>
 #include "bridge.h"
 #include "arrow/array/array_dict.h"
@@ -267,6 +268,47 @@ TableColumns(struct OpaqueArrow* arrow) {
 size_t
 TableSize(struct OpaqueArrow* arrow) {
     return arrow->table->num_rows();
+}
+
+size_t
+ColumnNullCount(struct OpaqueArrow* arrow, const char* name) {
+    auto column = arrow->table->GetColumnByName(name);
+
+    if (column) {
+        return column->null_count();
+    }
+
+    return 0;
+}
+
+void
+ReadNullsInto(
+    struct OpaqueArrow* arrow, const char* column, void* out_data, size_t len
+) {
+    auto col = arrow->table->GetColumnByName(column);
+    if (!col) {
+        return;
+    }
+
+    size_t bytes_written = 0;
+
+    auto* out = static_cast<uint8_t*>(out_data);
+
+    for (auto const& chunk : col->chunks()) {
+        if (chunk->null_count() == 0) {
+            continue;
+        }
+        auto const& bitmap = chunk->null_bitmap();
+        if (!bitmap) {
+            continue;
+        }
+        const auto bitmap_size = bitmap->size();
+        if (bytes_written + bitmap_size > len) {
+            std::abort();
+        }
+        memcpy(out + bytes_written, bitmap->data(), bitmap_size);
+        bytes_written += bitmap_size;
+    }
 }
 
 void
