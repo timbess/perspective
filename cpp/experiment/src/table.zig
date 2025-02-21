@@ -8,6 +8,7 @@ const root = @import("root.zig");
 const Dtype = root.Dtype;
 const PspError = root.PspError;
 const Field = root.Field;
+const Window = root.Window;
 
 pub const Schema = root.Schema;
 pub const Scalar = root.Scalar;
@@ -137,6 +138,10 @@ pub const Table = struct {
         self.size = col_size;
     }
 
+    pub fn hasColumn(self: *Self, name: []const u8) bool {
+        return self.name_mapping.contains(name);
+    }
+
     pub fn getColumn(self: *Self, name: []const u8) ?Column {
         return self.name_mapping.get(name) orelse null;
     }
@@ -174,6 +179,22 @@ pub const Table = struct {
             try self.appendRow(&row);
         }
         self.assertSizeOfAllColumns();
+    }
+
+    pub fn readWindow(self: *Self, allocator: std.mem.Allocator, window: Window) ![]Scalar {
+        const rstart = window.start_row;
+        const rend = window.end_row;
+        const cstart = window.start_col;
+        const cend = window.end_col;
+        if (rstart > rend or cstart > cend or rend > self.size or cend > self.columns.items.len) {
+            return error.InvalidArgument;
+        }
+
+        const results: []Scalar = try allocator.alloc(Scalar, (rend - rstart) * (cend - cstart));
+
+        try columns.readColumnsIntoScalars(self.columns.items[cstart..cend], results, rstart, rend);
+
+        return results;
     }
 
     /// Slice rows from the table. Probably smart to use an Arena allocator here.
@@ -252,7 +273,6 @@ test "table slices" {
     var table = try Table.init(std.testing.allocator, "test_table", schema);
     defer table.deinit();
 
-    // const rows: []const []const Scalar = &[_][]const Scalar{
     const rows_values: []const []const ScalarValue = &[_][]const ScalarValue{
         &[_]ScalarValue{ .{ .u32 = 1 }, .{ .f64 = 1 }, .{ .string = "foo" } },
         &[_]ScalarValue{ .{ .u32 = 2 }, .{ .f64 = 2 }, .{ .string = "bar" } },
@@ -291,6 +311,60 @@ test "table slices" {
             }
         }
     }
+}
+
+test "table windows" {
+    const fields = [_]root.Field{
+        .{ .name = "id", .dtype = Dtype.u32 },
+        .{ .name = "value", .dtype = Dtype.f64 },
+        .{ .name = "label", .dtype = Dtype.string },
+    };
+    var schema = try Schema.init(std.testing.allocator);
+    for (fields) |f| {
+        try schema.addField(f);
+    }
+
+    var table = try Table.init(std.testing.allocator, "test_table", schema);
+    defer table.deinit();
+
+    const rows_values: []const []const ScalarValue = &[_][]const ScalarValue{
+        &[_]ScalarValue{ .{ .u32 = 1 }, .{ .f64 = 1 }, .{ .string = "foo" } },
+        &[_]ScalarValue{ .{ .u32 = 2 }, .{ .f64 = 2 }, .{ .string = "bar" } },
+        &[_]ScalarValue{ .{ .u32 = 3 }, .{ .f64 = 3 }, .{ .string = "baz" } },
+    };
+    var rows: [3][3]Scalar = undefined;
+    for (rows_values, 0..) |row_values, row| {
+        for (row_values, 0..) |value, col| {
+            rows[row][col] = Scalar.defined(value);
+        }
+    }
+
+    try table.appendRowsComp(rows);
+
+    try std.testing.expectEqual(table.size, 3);
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const window = try table.readWindow(arena.allocator(), Window{
+        .start_col = 0,
+        .end_col = 3,
+        .start_row = 0,
+        .end_row = 3,
+    });
+
+    try std.testing.expectEqual(window.len, 9);
+
+    try std.testing.expectEqual(Scalar.defined(ScalarValue{ .u32 = 1 }), window[0]);
+    try std.testing.expectEqual(Scalar.defined(ScalarValue{ .f64 = 1 }), window[1]);
+    try std.testing.expectEqualStrings("foo", window[2].inner.string);
+
+    try std.testing.expectEqual(Scalar.defined(ScalarValue{ .u32 = 2 }), window[3]);
+    try std.testing.expectEqual(Scalar.defined(ScalarValue{ .f64 = 2 }), window[4]);
+    try std.testing.expectEqualStrings("bar", window[5].inner.string);
+
+    try std.testing.expectEqual(Scalar.defined(ScalarValue{ .u32 = 3 }), window[6]);
+    try std.testing.expectEqual(Scalar.defined(ScalarValue{ .f64 = 3 }), window[7]);
+    try std.testing.expectEqualStrings("baz", window[8].inner.string);
 }
 
 test "table creation and destruction" {

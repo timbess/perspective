@@ -214,6 +214,13 @@ pub const Dtype = enum {
     }
 };
 
+pub const Window = struct {
+    start_row: usize,
+    end_row: usize,
+    start_col: usize,
+    end_col: usize,
+};
+
 pub const ScalarValue = union(Dtype) {
     u32: u32,
     u64: u64,
@@ -242,11 +249,13 @@ pub const PspError = error{
     InvalidStatus,
     InvalidColumnCount,
     ColumnSizeMismatch,
+    ColumnNotFound,
 };
 
 test {
     _ = @import("columns.zig");
     _ = @import("table.zig");
     _ = @import("arrow.zig");
+    _ = @import("view.zig");
     _ = @import("bitvector.zig");
 }

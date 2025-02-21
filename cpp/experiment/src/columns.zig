@@ -567,3 +567,33 @@ test "ScalarColumn erasure/reflection with strings" {
         try std.testing.expectEqualStrings(value, reflected_column.getScalar(i).?.inner.string);
     }
 }
+
+pub fn readColumnsIntoScalars(
+    columns: []Column,
+    results: []Scalar,
+    rstart: usize,
+    rend: usize,
+) !void {
+    if (columns.len == 0) {
+        return;
+    }
+    if (@mod(results.len, columns.len) != 0) {
+        return error.InvalidArgument;
+    }
+    const size = columns[0].size();
+    for (columns) |col| {
+        if (col.size() != size) {
+            return PspError.ColumnSizeMismatch;
+        }
+    }
+    if (rstart > rend or rend > size) {
+        return error.InvalidArgument;
+    }
+
+    const ncols = columns.len;
+    for (columns, 0..) |*col, col_idx| {
+        for (rstart..rend) |r| {
+            results[(r - rstart) * ncols + col_idx] = col.getScalar(r).?;
+        }
+    }
+}
