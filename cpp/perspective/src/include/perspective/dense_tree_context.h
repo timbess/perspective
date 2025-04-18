@@ -36,10 +36,11 @@ public:
     const t_aggspec& get_aggspec(const std::string& aggname) const;
     void pprint(const t_filter& fltr) const;
 
-    std::pair<const t_uindex*, const t_uindex*> get_leaf_iterators(t_index idx
-    ) const;
+    std::pair<const t_uindex*, const t_uindex*>
+    get_leaf_iterators(t_index idx) const;
 
     std::shared_ptr<const t_column> get_pkey_col() const;
+    std::shared_ptr<const t_column> get_old_pkey_col() const;
     std::shared_ptr<const t_column> get_strand_count_col() const;
     std::shared_ptr<const t_data_table> get_strands() const;
     std::shared_ptr<const t_data_table> get_strand_deltas() const;

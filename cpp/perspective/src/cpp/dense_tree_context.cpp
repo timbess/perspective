@@ -166,6 +166,11 @@ t_dtree_ctx::get_pkey_col() const {
 }
 
 std::shared_ptr<const t_column>
+t_dtree_ctx::get_old_pkey_col() const {
+    return m_strands->get_const_column("psp_old_pkey");
+}
+
+std::shared_ptr<const t_column>
 t_dtree_ctx::get_strand_count_col() const {
     return m_strand_deltas->get_const_column("psp_strand_count");
 }

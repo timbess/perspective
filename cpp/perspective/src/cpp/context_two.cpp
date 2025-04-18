@@ -79,9 +79,9 @@ t_ctx2::init() {
         m_trees[treeidx]->init();
     }
 
-    m_rtraversal = std::make_shared<t_traversal>(rtree());
+    m_rtraversal = std::make_shared<t_traversal>(row_tree());
 
-    m_ctraversal = std::make_shared<t_traversal>(ctree());
+    m_ctraversal = std::make_shared<t_traversal>(column_tree());
 
     // Each context stores its own expression columns in separate
     // `t_data_table`s so that each context's expressions are isolated
@@ -508,7 +508,7 @@ void
 t_ctx2::column_sort_by(const std::vector<t_sortspec>& sortby) {
     PSP_TRACE_SENTINEL();
     PSP_VERBOSE_ASSERT(m_init, "touching uninited object");
-    m_ctraversal->sort_by(m_config, sortby, *(ctree()));
+    m_ctraversal->sort_by(m_config, sortby, *(column_tree()));
 }
 
 void
@@ -519,7 +519,7 @@ t_ctx2::sort_by(const std::vector<t_sortspec>& sortby) {
     if (m_sortby.empty()) {
         return;
     }
-    m_rtraversal->sort_by(m_config, sortby, *(rtree()), this);
+    m_rtraversal->sort_by(m_config, sortby, *(row_tree()), this);
 }
 
 void
@@ -535,7 +535,7 @@ t_ctx2::notify(const t_data_table& flattened) {
          ++tree_idx) {
         if (is_rtree_idx(tree_idx) != 0U) {
             notify_sparse_tree(
-                rtree(),
+                row_tree(),
                 m_rtraversal,
                 true,
                 m_config.get_aggregates(),
@@ -548,7 +548,7 @@ t_ctx2::notify(const t_data_table& flattened) {
             );
         } else if (is_ctree_idx(tree_idx) != 0U) {
             notify_sparse_tree(
-                ctree(),
+                column_tree(),
                 m_ctraversal,
                 true,
                 m_config.get_aggregates(),
@@ -593,7 +593,7 @@ t_ctx2::notify(
          ++tree_idx) {
         if (is_rtree_idx(tree_idx) != 0U) {
             notify_sparse_tree(
-                rtree(),
+                row_tree(),
                 m_rtraversal,
                 true,
                 m_config.get_aggregates(),
@@ -611,7 +611,7 @@ t_ctx2::notify(
             );
         } else if (is_ctree_idx(tree_idx) != 0U) {
             notify_sparse_tree(
-                ctree(),
+                column_tree(),
                 m_ctraversal,
                 true,
                 m_config.get_aggregates(),
@@ -673,7 +673,8 @@ t_ctx2::calc_translated_colidx(t_uindex n_aggs, t_uindex cidx) const {
 }
 
 std::vector<t_cellinfo>
-t_ctx2::resolve_cells(const std::vector<std::pair<t_uindex, t_uindex>>& cells
+t_ctx2::resolve_cells(
+    const std::vector<std::pair<t_uindex, t_uindex>>& cells
 ) const {
     std::vector<t_cellinfo> rval(cells.size());
 
@@ -773,7 +774,7 @@ t_ctx2::is_ctree_idx(t_uindex idx) const {
 }
 
 std::shared_ptr<t_stree>
-t_ctx2::rtree() {
+t_ctx2::row_tree() {
     return m_trees.back();
 }
 
@@ -783,7 +784,7 @@ t_ctx2::rtree() const {
 }
 
 std::shared_ptr<t_stree>
-t_ctx2::ctree() {
+t_ctx2::column_tree() {
     return m_trees.front();
 }
 
@@ -927,7 +928,8 @@ t_ctx2::set_depth(t_header header, t_depth depth) {
 }
 
 std::vector<t_tscalar>
-t_ctx2::get_pkeys(const std::vector<std::pair<t_uindex, t_uindex>>& cells
+t_ctx2::get_pkeys(
+    const std::vector<std::pair<t_uindex, t_uindex>>& cells
 ) const {
     tsl::hopscotch_set<t_tscalar> all_pkeys;
 
@@ -1078,8 +1080,8 @@ t_ctx2::reset(bool reset_expressions) {
         m_trees[treeidx]->set_deltas_enabled(get_feature_state(CTX_FEAT_DELTA));
     }
 
-    m_rtraversal = std::make_shared<t_traversal>(rtree());
-    m_ctraversal = std::make_shared<t_traversal>(ctree());
+    m_rtraversal = std::make_shared<t_traversal>(row_tree());
+    m_ctraversal = std::make_shared<t_traversal>(column_tree());
 
     if (reset_expressions) {
         m_expression_tables->reset();

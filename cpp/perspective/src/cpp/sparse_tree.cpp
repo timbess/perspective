@@ -10,6 +10,7 @@
 // ┃ of the [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0). ┃
 // ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
 
+#include "perspective/scalar.h"
 #include <perspective/first.h>
 #include <algorithm>
 #include <cmath>
@@ -175,6 +176,7 @@ t_stree::get_sortby_value(t_index idx) const {
 void
 t_stree::build_strand_table_phase_1(
     t_tscalar pkey,
+    t_tscalar old_pkey,
     t_op op,
     t_uindex idx,
     t_uindex npivots,
@@ -189,6 +191,7 @@ t_stree::build_strand_table_phase_1(
     std::vector<t_column*>& agg_acols,
     t_column* agg_scount,
     t_column* spkey,
+    t_column* source_old_pkey,
     t_uindex& insert_count,
     bool& pivots_neq,
     const std::vector<std::string>& pivot_like
@@ -237,10 +240,12 @@ t_stree::build_strand_table_phase_1(
     for (t_uindex aggidx = 0; aggidx < aggcolsize; ++aggidx) {
         if (aggidx != strand_count_idx) {
             if (pivots_neq || force_current_row) {
-                agg_acols[aggidx]->push_back(agg_ccols[aggidx]->get_scalar(idx)
+                agg_acols[aggidx]->push_back(
+                    agg_ccols[aggidx]->get_scalar(idx)
                 );
             } else {
-                agg_acols[aggidx]->push_back(agg_dcols[aggidx]->get_scalar(idx)
+                agg_acols[aggidx]->push_back(
+                    agg_dcols[aggidx]->get_scalar(idx)
                 );
             }
         }
@@ -261,6 +266,7 @@ t_stree::build_strand_table_phase_1(
 
     agg_scount->push_back<std::int8_t>(strand_count);
     spkey->push_back(pkey);
+    source_old_pkey->push_back(old_pkey);
 
     ++insert_count;
 }
@@ -268,6 +274,7 @@ t_stree::build_strand_table_phase_1(
 void
 t_stree::build_strand_table_phase_2(
     t_tscalar pkey,
+    t_tscalar old_pkey,
     t_uindex idx,
     t_uindex npivots,
     t_uindex strand_count_idx,
@@ -278,6 +285,7 @@ t_stree::build_strand_table_phase_2(
     std::vector<t_column*>& agg_acols,
     t_column* agg_scount,
     t_column* spkey,
+    t_column* source_old_pkey,
     t_uindex& insert_count,
     const std::vector<std::string>& pivot_like
 ) const {
@@ -304,6 +312,7 @@ t_stree::build_strand_table_phase_2(
 
     agg_scount->push_back<std::int8_t>(std::int8_t(-1));
     spkey->push_back(pkey);
+    source_old_pkey->push_back(old_pkey);
     ++insert_count;
 }
 
@@ -363,6 +372,9 @@ t_stree::build_strand_table_metadata(
     metadata.m_strand_schema.add_column(
         "psp_pkey", flattened.get_const_column("psp_pkey")->get_dtype()
     );
+    metadata.m_strand_schema.add_column(
+        "psp_old_pkey", flattened.get_const_column("psp_old_pkey")->get_dtype()
+    );
 
     for (const auto& aggcol : aggcolset) {
         metadata.m_aggschema.add_column(
@@ -416,6 +428,8 @@ t_stree::build_strand_table(
 
     std::shared_ptr<const t_column> pkey_col =
         flattened.get_const_column("psp_pkey");
+    std::shared_ptr<const t_column> pkey_old_col =
+        flattened.get_const_column("psp_old_pkey");
     std::shared_ptr<const t_column> op_col =
         flattened.get_const_column("psp_op");
 
@@ -466,6 +480,8 @@ t_stree::build_strand_table(
 
     t_column* spkey = strands->get_column("psp_pkey").get();
 
+    t_column* source_old_pkey = strands->get_column("psp_old_pkey").get();
+
     t_mask msk_prev;
     t_mask msk_curr;
 
@@ -483,6 +499,7 @@ t_stree::build_strand_table(
             bool filter_curr = msk_curr.get(idx);
 
             t_tscalar pkey = pkey_col->get_scalar(idx);
+            t_tscalar old_pkey = pkey_old_col->get_scalar(idx);
             std::uint8_t op_ = *(op_col->get_nth<std::uint8_t>(idx));
             t_op op = static_cast<t_op>(op_);
             bool pivots_neq;
@@ -495,6 +512,7 @@ t_stree::build_strand_table(
                 // apply current row
                 build_strand_table_phase_1(
                     pkey,
+                    old_pkey,
                     op,
                     idx,
                     metadata.m_pivsize,
@@ -509,6 +527,7 @@ t_stree::build_strand_table(
                     agg_acols,
                     agg_scount,
                     spkey,
+                    source_old_pkey,
                     insert_count,
                     pivots_neq,
                     metadata.m_pivot_like_columns
@@ -517,6 +536,7 @@ t_stree::build_strand_table(
                 // reverse prev row
                 build_strand_table_phase_2(
                     pkey,
+                    old_pkey,
                     idx,
                     metadata.m_pivsize,
                     strand_count_idx,
@@ -527,6 +547,7 @@ t_stree::build_strand_table(
                     agg_acols,
                     agg_scount,
                     spkey,
+                    source_old_pkey,
                     insert_count,
                     metadata.m_pivot_like_columns
                 );
@@ -534,6 +555,7 @@ t_stree::build_strand_table(
                 // should be handled as normal
                 build_strand_table_phase_1(
                     pkey,
+                    old_pkey,
                     op,
                     idx,
                     metadata.m_pivsize,
@@ -548,6 +570,7 @@ t_stree::build_strand_table(
                     agg_acols,
                     agg_scount,
                     spkey,
+                    source_old_pkey,
                     insert_count,
                     pivots_neq,
                     metadata.m_pivot_like_columns
@@ -559,6 +582,7 @@ t_stree::build_strand_table(
 
                 build_strand_table_phase_2(
                     pkey,
+                    old_pkey,
                     idx,
                     metadata.m_pivsize,
                     strand_count_idx,
@@ -569,6 +593,7 @@ t_stree::build_strand_table(
                     agg_acols,
                     agg_scount,
                     spkey,
+                    source_old_pkey,
                     insert_count,
                     metadata.m_pivot_like_columns
                 );
@@ -579,6 +604,7 @@ t_stree::build_strand_table(
              ++idx) {
 
             t_tscalar pkey = pkey_col->get_scalar(idx);
+            t_tscalar old_pkey = pkey_old_col->get_scalar(idx);
             std::uint8_t op_ = *(op_col->get_nth<std::uint8_t>(idx));
             t_op op = static_cast<t_op>(op_);
             bool pivots_neq;
@@ -588,6 +614,7 @@ t_stree::build_strand_table(
             // col for strand
             build_strand_table_phase_1(
                 pkey,
+                old_pkey,
                 op,
                 idx,
                 metadata.m_pivsize,
@@ -602,6 +629,7 @@ t_stree::build_strand_table(
                 agg_acols,
                 agg_scount,
                 spkey,
+                source_old_pkey,
                 insert_count,
                 pivots_neq,
                 metadata.m_pivot_like_columns
@@ -615,6 +643,7 @@ t_stree::build_strand_table(
             // piv_pcols: prev, piv_scols: strands? final data?
             build_strand_table_phase_2(
                 pkey,
+                old_pkey,
                 idx,
                 metadata.m_pivsize,
                 strand_count_idx,
@@ -625,6 +654,7 @@ t_stree::build_strand_table(
                 agg_acols,
                 agg_scount,
                 spkey,
+                source_old_pkey,
                 insert_count,
                 metadata.m_pivot_like_columns
             );
@@ -745,7 +775,8 @@ t_stree::build_strand_table(
             if (aggidx == 0) {
                 t_tscalar pkey = pkey_col->get_scalar(idx);
                 for (t_uindex pidx = 0; pidx < ploop_end; ++pidx) {
-                    piv_scols[pidx]->push_back(piv_fcols[pidx]->get_scalar(idx)
+                    piv_scols[pidx]->push_back(
+                        piv_fcols[pidx]->get_scalar(idx)
                     );
                 }
 
@@ -788,6 +819,7 @@ t_stree::populate_pkey_idx(
 ) {
     if (ndepth == dtree.last_level()) {
         auto pkey_col = ctx.get_pkey_col();
+        auto pkey_old_col = ctx.get_old_pkey_col();
         auto strand_count_col = ctx.get_strand_count_col();
         auto liters = ctx.get_leaf_iterators(dptidx);
 
@@ -797,8 +829,13 @@ t_stree::populate_pkey_idx(
             auto lfidx = *lfiter;
             auto pkey =
                 m_symtable.get_interned_tscalar(pkey_col->get_scalar(lfidx));
+            auto old_pkey = pkey_old_col->get_scalar(lfidx);
             auto strand_count =
                 *(strand_count_col->get_nth<std::int8_t>(lfidx));
+
+            if (old_pkey.is_valid()) {
+                remove_all_pkey(old_pkey);
+            }
 
             // Checks the strand count and adds a new primary key if it's
             // increased.
@@ -1956,8 +1993,9 @@ t_stree::get_ancestry(t_uindex idx) const {
 }
 
 t_index
-t_stree::get_sibling_idx(t_index p_ptidx, t_index p_nchild, t_uindex c_ptidx)
-    const {
+t_stree::get_sibling_idx(
+    t_index p_ptidx, t_index p_nchild, t_uindex c_ptidx
+) const {
     t_by_pidx_ipair iterators = m_nodes->get<by_pidx>().equal_range(p_ptidx);
     iter_by_pidx c_iter =
         m_nodes->project<by_pidx>(m_nodes->get<by_idx>().find(c_ptidx));
@@ -2085,6 +2123,17 @@ t_stree::remove_pkey(t_uindex idx, t_tscalar pkey) {
     }
 
     m_idxpkey->get<by_idx_pkey>().erase(iter);
+}
+
+void
+t_stree::remove_all_pkey(t_tscalar pkey) {
+    auto iter = m_idxpkey->get<by_pkey>().find(pkey);
+
+    if (iter == m_idxpkey->get<by_pkey>().end()) {
+        return;
+    }
+
+    m_idxpkey->get<by_pkey>().erase(iter);
 }
 
 void
@@ -2297,7 +2346,8 @@ t_stree::get_aggregates_for_sorting(
         auto which_agg = agg_indices[idx];
         if (which_agg < 0) {
             aggregates[idx] = get_sortby_value(nidx);
-        } else if ((ctx2 != nullptr) || (size_t(which_agg) >= m_aggcols.size())) {
+        } else if ((ctx2 != nullptr)
+                   || (size_t(which_agg) >= m_aggcols.size())) {
             aggregates[idx].set(t_none());
             if (ctx2 != nullptr) {
                 if ((ctx2->get_config().get_totals() == TOTALS_BEFORE)

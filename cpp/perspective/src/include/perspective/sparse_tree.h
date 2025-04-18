@@ -62,6 +62,8 @@ struct by_nstrands {};
 
 struct by_idx_pkey {};
 
+struct by_pkey {};
+
 struct by_idx_lfidx {};
 
 PERSPECTIVE_EXPORT t_tscalar get_dominant(std::vector<t_tscalar>& values);
@@ -75,7 +77,7 @@ struct t_build_strand_table_metadata {
     t_uindex m_pivsize;
 };
 
-typedef multi_index_container<
+using t_treenodes = multi_index_container<
     t_stnode,
     indexed_by<
         ordered_unique<
@@ -99,40 +101,41 @@ typedef multi_index_container<
             composite_key<
                 t_stnode,
                 BOOST_MULTI_INDEX_MEMBER(t_stnode, t_uindex, m_pidx),
-                BOOST_MULTI_INDEX_MEMBER(t_stnode, t_tscalar, m_value)>>>>
-    t_treenodes;
+                BOOST_MULTI_INDEX_MEMBER(t_stnode, t_tscalar, m_value)>>>>;
 
-typedef multi_index_container<
+using t_idxpkey = multi_index_container<
     t_stpkey,
-    indexed_by<ordered_unique<
-        tag<by_idx_pkey>,
-        composite_key<
-            t_stpkey,
-            BOOST_MULTI_INDEX_MEMBER(t_stpkey, t_uindex, m_idx),
-            BOOST_MULTI_INDEX_MEMBER(t_stpkey, t_tscalar, m_pkey)>>>>
-    t_idxpkey;
+    indexed_by<
+        hashed_non_unique<
+            tag<by_pkey>,
+            BOOST_MULTI_INDEX_MEMBER(t_stpkey, t_tscalar, m_pkey)>,
+        ordered_unique<
+            tag<by_idx_pkey>,
+            composite_key<
+                t_stpkey,
+                BOOST_MULTI_INDEX_MEMBER(t_stpkey, t_uindex, m_idx),
+                BOOST_MULTI_INDEX_MEMBER(t_stpkey, t_tscalar, m_pkey)>>>>;
 
-typedef multi_index_container<
+using t_idxleaf = multi_index_container<
     t_stleaves,
     indexed_by<ordered_unique<
         tag<by_idx_lfidx>,
         composite_key<
             t_stleaves,
             BOOST_MULTI_INDEX_MEMBER(t_stleaves, t_uindex, m_idx),
-            BOOST_MULTI_INDEX_MEMBER(t_stleaves, t_uindex, m_lfidx)>>>>
-    t_idxleaf;
+            BOOST_MULTI_INDEX_MEMBER(t_stleaves, t_uindex, m_lfidx)>>>>;
 
-typedef t_treenodes::index<by_idx>::type index_by_idx;
-typedef t_treenodes::index<by_pidx>::type index_by_pidx;
+using index_by_idx = t_treenodes::index<by_idx>::type;
+using index_by_pidx = t_treenodes::index<by_pidx>::type;
 
-typedef t_treenodes::index<by_idx>::type::iterator iter_by_idx;
-typedef t_treenodes::index<by_pidx>::type::iterator iter_by_pidx;
-typedef t_treenodes::index<by_pidx_hash>::type::iterator iter_by_pidx_hash;
-typedef std::pair<iter_by_pidx, iter_by_pidx> t_by_pidx_ipair;
+using iter_by_idx = t_treenodes::index<by_idx>::type::iterator;
+using iter_by_pidx = t_treenodes::index<by_pidx>::type::iterator;
+using iter_by_pidx_hash = t_treenodes::index<by_pidx_hash>::type::iterator;
+using t_by_pidx_ipair = std::pair<iter_by_pidx, iter_by_pidx>;
 
-typedef t_idxpkey::index<by_idx_pkey>::type::iterator iter_by_idx_pkey;
+using iter_by_idx_pkey = t_idxpkey::index<by_idx_pkey>::type::iterator;
 
-typedef std::pair<iter_by_idx_pkey, iter_by_idx_pkey> t_by_idx_pkey_ipair;
+using t_by_idx_pkey_ipair = std::pair<iter_by_idx_pkey, iter_by_idx_pkey>;
 
 struct PERSPECTIVE_EXPORT t_agg_update_info {
     std::vector<const t_column*> m_src;
@@ -182,6 +185,7 @@ public:
 
     void build_strand_table_phase_1(
         t_tscalar pkey,
+        t_tscalar old_pkey,
         t_op op,
         t_uindex idx,
         t_uindex npivots,
@@ -196,6 +200,7 @@ public:
         std::vector<t_column*>& agg_acols,
         t_column* agg_scountspar,
         t_column* spkey,
+        t_column* source_old_pkey,
         t_uindex& insert_count,
         bool& pivots_neq,
         const std::vector<std::string>& pivot_like
@@ -203,6 +208,7 @@ public:
 
     void build_strand_table_phase_2(
         t_tscalar pkey,
+        t_tscalar old_pkey,
         t_uindex idx,
         t_uindex npivots,
         t_uindex strand_count_idx,
@@ -213,6 +219,7 @@ public:
         std::vector<t_column*>& agg_acols,
         t_column* agg_scount,
         t_column* spkey,
+        t_column* source_old_pkey,
         t_uindex& insert_count,
         const std::vector<std::string>& pivot_like
     ) const;
@@ -249,11 +256,11 @@ public:
     void get_child_nodes(t_uindex idx, t_tnodevec& nodes) const;
     std::vector<t_uindex> zero_strands() const;
 
-    std::set<t_uindex> non_zero_leaves(const std::vector<t_uindex>& zero_strands
-    ) const;
+    std::set<t_uindex>
+    non_zero_leaves(const std::vector<t_uindex>& zero_strands) const;
 
-    std::set<t_uindex> non_zero_ids(const std::vector<t_uindex>& zero_strands
-    ) const;
+    std::set<t_uindex>
+    non_zero_ids(const std::vector<t_uindex>& zero_strands) const;
 
     std::set<t_uindex> non_zero_ids(
         const std::set<t_uindex>& ptiset,
@@ -282,6 +289,7 @@ public:
 
     void add_pkey(t_uindex idx, t_tscalar pkey);
     void remove_pkey(t_uindex idx, t_tscalar pkey);
+    void remove_all_pkey(t_tscalar pkey);
     void add_leaf(t_uindex nidx, t_uindex lfidx);
     void remove_leaf(t_uindex nidx, t_uindex lfidx);
 
@@ -293,8 +301,8 @@ public:
     std::vector<t_uindex> get_leaves(t_uindex idx) const;
     std::vector<t_tscalar> get_pkeys(t_uindex idx) const;
     std::vector<t_uindex> get_child_idx(t_uindex idx) const;
-    std::vector<std::pair<t_index, t_index>> get_child_idx_depth(t_uindex idx
-    ) const;
+    std::vector<std::pair<t_index, t_index>>
+    get_child_idx_depth(t_uindex idx) const;
 
     void populate_leaf_index(const std::set<t_uindex>& leaves);
 
@@ -306,9 +314,12 @@ public:
 
     // aggregates should be presized to be same size
     // as agg_indices
-    void
-    get_aggregates_for_sorting(t_uindex nidx, const std::vector<t_index>& agg_indices, std::vector<t_tscalar>& aggregates, t_ctx2*)
-        const;
+    void get_aggregates_for_sorting(
+        t_uindex nidx,
+        const std::vector<t_index>& agg_indices,
+        std::vector<t_tscalar>& aggregates,
+        t_ctx2*
+    ) const;
 
     t_tscalar get_aggregate(t_index idx, t_index aggnum) const;
 

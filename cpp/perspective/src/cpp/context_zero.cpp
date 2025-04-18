@@ -120,6 +120,7 @@ t_ctx0::notify(
         for (t_uindex idx = 0; idx < nrecs; ++idx) {
             t_tscalar pkey =
                 m_symtable.get_interned_tscalar(pkey_col->get_scalar(idx));
+            const auto old_pkey = old_pkey_col->get_scalar(idx);
 
             std::uint8_t op_ = *(op_col->get_nth<std::uint8_t>(idx));
             t_op op = static_cast<t_op>(op_);
@@ -131,7 +132,15 @@ t_ctx0::notify(
                     bool filter_prev = msk_prev.get(idx) && existed;
 
                     if (filter_prev) {
-                        if (filter_curr) {
+                        if (old_pkey.is_valid()) {
+                            m_traversal->move_row(
+                                *m_gstate,
+                                *(m_expression_tables->m_master),
+                                m_config,
+                                old_pkey,
+                                pkey
+                            );
+                        } else if (filter_curr) {
                             m_traversal->update_row(
                                 *m_gstate,
                                 *(m_expression_tables->m_master),
@@ -445,7 +454,8 @@ t_ctx0::get_column_name(t_index idx) {
 }
 
 std::vector<t_tscalar>
-t_ctx0::get_pkeys(const std::vector<std::pair<t_uindex, t_uindex>>& cells
+t_ctx0::get_pkeys(
+    const std::vector<std::pair<t_uindex, t_uindex>>& cells
 ) const {
     if (!m_traversal->validate_cells(cells)) {
         std::vector<t_tscalar> rval;
@@ -455,7 +465,8 @@ t_ctx0::get_pkeys(const std::vector<std::pair<t_uindex, t_uindex>>& cells
 }
 
 std::vector<t_tscalar>
-t_ctx0::get_all_pkeys(const std::vector<std::pair<t_uindex, t_uindex>>& cells
+t_ctx0::get_all_pkeys(
+    const std::vector<std::pair<t_uindex, t_uindex>>& cells
 ) const {
     if (!m_traversal->validate_cells(cells)) {
         std::vector<t_tscalar> rval;
