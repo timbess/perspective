@@ -32,9 +32,7 @@ import * as arrows from "./test_arrows.js";
     }
 
     test.describe("Limits", () => {
-        test("Limiting rows should not limit the index space", async ({
-            page,
-        }) => {
+        test("Limiting rows should not limit the index space", async () => {
             const table = await perspective.table(
                 {
                     x: "integer",
@@ -61,6 +59,27 @@ import * as arrows from "./test_arrows.js";
             let viewData = await view.to_json();
             expect(viewData.length).toBe(10);
             expect(viewData).toEqual(data.slice(-10));
+        });
+
+        test("Writes should always overwrite oldest row", async () => {
+            const table = await perspective.table(
+                {
+                    x: "integer",
+                    group: "integer",
+                },
+                { limit: 10 }
+            );
+
+            const data = [];
+            for (let i = 0; i < 15; i++) {
+                const row = { x: i, group: 0 };
+                data.push(row);
+                await table.update([row]);
+                await table.size();
+            }
+
+            const viewRows = await (await table.view({})).to_json();
+            expect(viewRows).toEqual(data.slice(-10));
         });
 
         test("Append in sequence", async () => {

@@ -31,3 +31,30 @@ class TestTableInfer(object):
     def test_table_limit_with_json(self):
         t = Table({"a": [1, 2, 3]}, limit=1)
         assert t.size() == 1
+
+    def test_table_limit_wrap_around_always_overwrites_oldest_insert(self):
+        t = Table({"x": "integer"}, limit=10)
+
+        data = []
+        for i in range(15):
+            row = {"x": i}
+            data.append(row)
+            t.update([row])
+            t.size()
+
+        v = t.view()
+        assert data[-10:] == v.to_json()
+
+    def test_table_limit_wrap_around_respectts_num_table_rows(self):
+        t = Table({"x": "integer", "group": "string"}, limit=10)
+
+        v = t.view(split_by=["group"])
+
+        data = []
+        for i in range(5):
+            row = {"x": i, "group": "a"}
+            data.append(row)
+            t.update([row] * 6)
+            t.size()
+
+        assert v.dimensions()["num_table_rows"] == 10

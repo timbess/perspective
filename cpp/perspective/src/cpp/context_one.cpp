@@ -425,7 +425,8 @@ t_ctx1::set_depth(t_depth depth) {
 }
 
 std::vector<t_tscalar>
-t_ctx1::get_pkeys(const std::vector<std::pair<t_uindex, t_uindex>>& cells
+t_ctx1::get_pkeys(
+    const std::vector<std::pair<t_uindex, t_uindex>>& cells
 ) const {
     PSP_TRACE_SENTINEL();
     PSP_VERBOSE_ASSERT(m_init, "touching uninited object");

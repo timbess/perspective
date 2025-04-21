@@ -283,8 +283,8 @@ protected:
 
 private:
     // Unused methods
-    std::vector<t_uindex> get_pkeys_idx(const std::vector<t_tscalar>& pkeys
-    ) const;
+    std::vector<t_uindex>
+    get_pkeys_idx(const std::vector<t_tscalar>& pkeys) const;
     std::vector<t_tscalar> has_pkeys(const std::vector<t_tscalar>& pkeys) const;
     std::vector<t_tscalar> get_pkeys() const;
 
@@ -293,6 +293,7 @@ private:
 
     bool m_init;
     t_uindex m_limit;
+    t_uindex m_last_idx;
     std::shared_ptr<t_data_table> m_table;
     t_mapping m_mapping;
     t_free_items m_free;

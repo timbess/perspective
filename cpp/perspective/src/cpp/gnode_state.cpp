@@ -50,6 +50,7 @@ t_gstate::init() {
     m_pkcol = m_table->get_column("psp_pkey");
     m_opcol = m_table->get_column("psp_op");
     m_init = true;
+    m_last_idx = m_table->size();
 }
 
 t_rlookup
@@ -109,7 +110,7 @@ t_gstate::lookup_or_create(const t_tscalar& pkey) {
         return idx;
     }
 
-    t_uindex next_idx_original = m_table->size();
+    t_uindex next_idx_original = m_last_idx++;
     t_uindex next_idx = next_idx_original % m_limit;
 
     if (next_idx + 1 <= m_limit) {
@@ -192,6 +193,9 @@ t_gstate::fill_master_table(const t_data_table* flattened) {
         }
     }
 
+    // Initial fill bypasses lookup_or_create()
+    m_last_idx = m_table->size();
+
 #if PSP_DEBUG
     LOG_DEBUG("Flattened");
     flattened->pprint();
@@ -211,6 +215,8 @@ t_gstate::update_master_table(const t_data_table* flattened) {
         fill_master_table(flattened);
         return;
     }
+
+    LOG_DEBUG("m_last_idx" << m_last_idx);
 
     // Update existing `m_table`
     const t_column* flattened_pkey_col =
