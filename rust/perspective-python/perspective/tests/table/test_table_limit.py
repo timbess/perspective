@@ -10,6 +10,7 @@
 #  ┃ of the [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0). ┃
 #  ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
 
+import random
 import perspective as psp
 
 client = psp.Server().new_local_client()
@@ -52,9 +53,11 @@ class TestTableInfer(object):
 
         data = []
         for i in range(5):
-            row = {"x": i, "group": "a"}
+            group = random.choice(["a", "b"])
+            row = {"x": i, "group": group}
             data.append(row)
             t.update([row] * 6)
             t.size()
 
         assert v.dimensions()["num_table_rows"] == 10
+        assert v.dimensions()["num_view_rows"] == 10

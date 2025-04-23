@@ -10,6 +10,7 @@
 // ┃ of the [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0). ┃
 // ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
 
+#include "perspective/column.h"
 #include "perspective/scalar.h"
 #include <perspective/first.h>
 #include <algorithm>
@@ -264,6 +265,13 @@ t_stree::build_strand_table_phase_1(
                                                                             : 0;
     }
 
+    if (old_pkey.is_valid()) {
+        strand_count = -1;
+        // agg_scount->push_back<std::int8_t>(-1);
+        // spkey->push_back(old_pkey);
+        // ++insert_count;
+    }
+
     agg_scount->push_back<std::int8_t>(strand_count);
     spkey->push_back(pkey);
     source_old_pkey->push_back(old_pkey);
@@ -314,6 +322,13 @@ t_stree::build_strand_table_phase_2(
     spkey->push_back(pkey);
     source_old_pkey->push_back(old_pkey);
     ++insert_count;
+
+    if (old_pkey.is_valid()) {
+
+        // agg_scount->push_back<std::int8_t>(std::int8_t(-1));
+        // spkey->push_back(old_pkey);
+        // ++insert_count;
+    }
 }
 
 t_build_strand_table_metadata
@@ -706,6 +721,9 @@ t_stree::build_strand_table(
     std::shared_ptr<const t_column> pkey_col =
         flattened.get_const_column("psp_pkey");
 
+    std::shared_ptr<const t_column> old_pkey_col =
+        flattened.get_const_column("psp_old_pkey");
+
     std::shared_ptr<const t_column> op_col =
         flattened.get_const_column("psp_op");
 
@@ -774,14 +792,24 @@ t_stree::build_strand_table(
 
             if (aggidx == 0) {
                 t_tscalar pkey = pkey_col->get_scalar(idx);
+                t_tscalar old_pkey = old_pkey_col->get_scalar(idx);
                 for (t_uindex pidx = 0; pidx < ploop_end; ++pidx) {
                     piv_scols[pidx]->push_back(
                         piv_fcols[pidx]->get_scalar(idx)
                     );
                 }
 
-                agg_scount->push_back<std::int8_t>(1);
+                std::int8_t strand_count = 1;
+                if (old_pkey.is_valid()) {
+                    // strand_count--;
+                    // agg_scount->push_back<std::int8_t>(-1);
+                    // spkey->push_back(old_pkey);
+                    // ++insert_count;
+                }
+
+                agg_scount->push_back<std::int8_t>(strand_count);
                 spkey->push_back(pkey);
+
                 ++insert_count;
             } else if (aggidx - 1 != strand_count_idx) {
                 agg_acols[aggidx - 1]->push_back(
@@ -833,9 +861,9 @@ t_stree::populate_pkey_idx(
             auto strand_count =
                 *(strand_count_col->get_nth<std::int8_t>(lfidx));
 
-            if (old_pkey.is_valid()) {
-                remove_all_pkey(old_pkey);
-            }
+            // if (old_pkey.is_valid()) {
+            //     remove_all_pkey(old_pkey);
+            // }
 
             // Checks the strand count and adds a new primary key if it's
             // increased.
@@ -2133,7 +2161,15 @@ t_stree::remove_all_pkey(t_tscalar pkey) {
         return;
     }
 
-    m_idxpkey->get<by_pkey>().erase(iter);
+    // while (iter != m_idxpkey->get<by_pkey>().end()) {
+    //     for (auto ancestor : get_ancestry(iter->m_idx)) {
+    //         remove_leaf(ancestor, iter->m_idx);
+    //     }
+    //     m_nodes->get<by_idx>().erase(iter->m_idx);
+    //     iter++;
+    // }
+
+    m_idxpkey->get<by_pkey>().erase(pkey);
 }
 
 void
