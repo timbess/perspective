@@ -412,21 +412,21 @@ importers:
 
   examples/python-duckdb-virtual:
     dependencies:
-      '@finos/perspective':
+      '@perspective-dev/client':
         specifier: workspace:^
         version: link:../../rust/perspective-js
-      '@finos/perspective-viewer':
+      '@perspective-dev/viewer':
         specifier: workspace:^
         version: link:../../rust/perspective-viewer
-      '@finos/perspective-viewer-d3fc':
+      '@perspective-dev/viewer-d3fc':
         specifier: workspace:^
-        version: link:../../packages/perspective-viewer-d3fc
-      '@finos/perspective-viewer-datagrid':
+        version: link:../../packages/viewer-d3fc
+      '@perspective-dev/viewer-datagrid':
         specifier: workspace:^
-        version: link:../../packages/perspective-viewer-datagrid
-      '@finos/perspective-workspace':
+        version: link:../../packages/viewer-datagrid
+      '@perspective-dev/workspace':
         specifier: workspace:^
-        version: link:../../packages/perspective-workspace
+        version: link:../../packages/workspace
       superstore-arrow:
         specifier: 'catalog:'
         version: 3.2.0
@@ -666,7 +666,7 @@ importers:
         version: 0.1.17
       copy-webpack-plugin:
         specifier: ~12
-        version: 12.0.2(webpack@5.102.1(webpack-cli@5.1.4))
+        version: 12.0.2(webpack@5.102.1)
       zx:
         specifier: ^8.1.8
         version: 8.8.5
@@ -13797,7 +13797,7 @@ snapshots:
       serialize-javascript: 6.0.2
       webpack: 5.102.1(webpack-cli@5.1.4)
 
-  copy-webpack-plugin@12.0.2(webpack@5.102.1(webpack-cli@5.1.4)):
+  copy-webpack-plugin@12.0.2(webpack@5.102.1):
     dependencies:
       fast-glob: 3.3.3
       glob-parent: 6.0.2
