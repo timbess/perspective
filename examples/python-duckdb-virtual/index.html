@@ -23,9 +23,33 @@
             // Websocket connections at the specified URL.
             const websocket = await perspective.websocket("ws://localhost:3000/websocket");
             const table = await websocket.open_table("data_source_one");
+            const config = {
+                version: "3.8.0",
+                plugin: "Datagrid",
+                plugin_config: {
+                    columns: {},
+                    edit_mode: "READ_ONLY",
+                    scroll_lock: false,
+                },
+                columns_config: {},
+                settings: true,
+                theme: "Pro Light",
+                title: null,
+                group_by: ["division", "trading area", "symbol"],
+                split_by: [],
+                sort: [],
+                filter: [],
+                expressions: {},
+                columns: ["MV", "MVCOPY"],
+                aggregates: {
+                    MV: "gmv",
+                    MVCOPY: "cumsum",
+                },
+            };
 
             // Load this in the `<perspective-viewer>`.
             viewer.load(table);
+            viewer.restore(config);
         </script>
     </body>
 </html>
