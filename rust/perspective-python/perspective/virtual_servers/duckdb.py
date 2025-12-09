@@ -17,8 +17,15 @@ from abc import ABC, abstractmethod
 from datetime import datetime
 from loguru import logger
 from enum import Enum
+from typing import List
 
 from perspective.virtual_servers import VirtualSessionModel
+from perspective.virtual_servers.sql_builder import (
+    BinaryOp, BinaryOperator, CTE, ColumnRef, Pivot,
+    Expr, JoinType, Select, SelectColumn, SortDir, TableRef,
+    col as col_ref, count_all, create_table, cte as make_cte, describe, drop_table, func,
+    join as make_join, lit, query_with_ctes, raw, select_col, tableref, window, order_by
+)
 
 # TODO(texodus): Missing these features
 #
@@ -102,22 +109,16 @@ class CustomAggregateType(Enum):
     STRING = 2
 
 class CustomAggregate(ABC):
+    def __init__(self, underlying_type: CustomAggregateType, cte_suffix: str):
+        self.underlying_type = underlying_type
+        self.cte_suffix = cte_suffix
+
     @abstractmethod
-    def build_cte(self, col, col_name_fn, group_by, table_name):
+    def build_cte(self, cte_name: str, col: ColumnRef, group_by: List[ColumnRef], table: TableRef) -> List[CTE]:
         pass
 
     @abstractmethod
-    def build_select(self, col, col_name_fn, group_by):
-        pass
-
-    @property
-    @abstractmethod
-    def cte_suffix(self) -> str:
-        pass
-
-    @property
-    @abstractmethod
-    def underlying_type(self) -> CustomAggregateType:
+    def build_select(self, cte_table: TableRef, col: ColumnRef, group_by: List[ColumnRef]) -> SelectColumn:
         pass
 
 class DuckDBVirtualSession:
@@ -129,6 +130,9 @@ class DuckDBVirtualSession:
 
     def handle_request(self, msg):
         self.callback(self.session.handle_request(msg))
+
+    def close(self):
+        pass
 
 
 class DuckDBVirtualServer:
@@ -185,7 +189,7 @@ class DuckDBVirtualSessionModel(VirtualSessionModel):
         return [result[2] for result in results]
 
     def table_schema(self, table_name):
-        query = f"DESCRIBE {table_name}"
+        query = describe(table_name).to_sql()
         results = run_query(self.db, query)
         return {
             result[0].split("_")[-1]: duckdb_type_to_psp(result[1])
@@ -195,16 +199,23 @@ class DuckDBVirtualSessionModel(VirtualSessionModel):
 
     def table_columns_size(self, table_name, config):
         # TODO split this into 2 methods
-        query = f"SELECT COUNT(*) FROM (DESCRIBE {table_name})"
-        results = run_query(self.db, query)
+        desc_query = describe(table_name).to_sql()
+        query_obj = Select(
+            columns=[select_col(count_all())],
+            from_table=f"({desc_query})"
+        )
+        results = run_query(self.db, query_obj.to_sql())
         gs = len(config["group_by"])
         return results[0][0] - (
             0 if gs == 0 else gs + (1 if len(config["split_by"]) == 0 else 0)
         )
 
     def table_size(self, table_name):
-        query = f"SELECT COUNT(*) FROM {table_name}"
-        results = run_query(self.db, query)
+        query_obj = Select(
+            columns=[select_col(count_all())],
+            from_table=table_name
+        )
+        results = run_query(self.db, query_obj.to_sql())
         return results[0][0]
 
     def view_schema(self, view_name, config):
@@ -225,325 +236,244 @@ class DuckDBVirtualSessionModel(VirtualSessionModel):
             for col in columns
             if aggregates.get(col) in self.custom_aggregates
         }
-        has_custom_aggs = len(columns_with_custom_aggs) > 0
 
-        def col_name(col):
-            return expr if (expr := config["expressions"].get(col)) else f'"{col}"'
+        def resolve_col(col_name_str: str, table: TableRef = None) -> Expr:
+            expr = config["expressions"].get(col_name_str)
+            if expr:
+                return raw(expr)
+            if table:
+                return table.col(col_name_str)
+            return col_ref(col_name_str)
 
-        def select_clause():
-            if len(group_by) > 0:
+        def where_clause():
+            for name, op, value in config["filter"]:
+                if value is not None:
+                    yield BinaryOp(resolve_col(name), str_to_operator(op), lit(value))
+
+        if columns_with_custom_aggs and group_by and not split_by:
+            query = self._build_custom_agg_query(
+                table_name, columns, group_by, columns_with_custom_aggs,
+                aggregates, where_clause, resolve_col, sort
+            )
+            run_query(self.db, create_table(view_name, query, temporary=True).to_sql(), execute=True)
+            return
+
+        where_exprs = list(where_clause())
+
+        if split_by:
+            query = Select(
+                columns=["*"],
+                exclude=[resolve_col(c) for c in group_by],
+                from_table=Pivot(
+                    Select(columns=["*"], from_table=table_name, where=where_exprs or None),
+                    on=[resolve_col(c) for c in split_by],
+                    using=[select_col(func(aggregates.get(c), resolve_col(c)), c) for c in columns],
+                    group_by=[resolve_col(g) for g in group_by]
+                )
+            )
+            run_query(self.db, create_table(view_name, query, temporary=True).to_sql(), execute=True)
+        else:
+            select_cols = []
+            if group_by:
                 for col in columns:
-                    yield f'{aggregates.get(col)}({col_name(col)}) as "{col}"'
-
-                if len(split_by) == 0:
-                    for idx, group in enumerate(group_by):
-                        yield f"{col_name(group)} as __ROW_PATH_{idx}__"
-
-                    groups = ", ".join(col_name(g) for g in group_by)
-                    yield f"GROUPING_ID({groups}) AS __GROUPING_ID__"
-            elif len(columns) > 0:
+                    select_cols.append(select_col(func(aggregates.get(col), resolve_col(col)), col))
+                for idx, group in enumerate(group_by):
+                    select_cols.append(select_col(resolve_col(group), f"__ROW_PATH_{idx}__"))
+                select_cols.append(select_col(func("GROUPING_ID", *[resolve_col(g) for g in group_by]), "__GROUPING_ID__"))
+            else:
                 for col in columns:
-                    yield f'''{col_name(col)} as "{col.replace('"', '""')}"'''
+                    select_cols.append(select_col(resolve_col(col), col.replace('"', '""')))
 
-        def order_by_clause():
-            if len(group_by) > 0:
+            order_by_tuples = []
+            if group_by:
                 for gidx in range(len(group_by)):
-                    groups = ", ".join(col_name(g) for g in group_by[: (gidx + 1)])
-                    if len(split_by) == 0:
-                        yield f"""GROUPING_ID({groups}) DESC"""
+                    group_slice = [resolve_col(g) for g in group_by[: (gidx + 1)]]
+                    order_by_tuples.append((func("GROUPING_ID", *group_slice), SortDir.DESC))
 
                     for sort_col, sort_dir in sort:
                         if sort_dir != "none":
                             agg = aggregates.get(sort_col)
                             if gidx >= len(group_by) - 1:
-                                yield f"{agg}({col_name(sort_col)}) {sort_dir}"
+                                order_by_tuples.append((func(agg, resolve_col(sort_col)), SortDir.DESC if sort_dir == "desc" else SortDir.ASC))
                             else:
-                                yield f"""
-                                    first({agg}({col_name(sort_col)}))
-                                    OVER __WINDOW_{gidx}__ {sort_dir}
-                                """
+                                window_expr = func("first", func(agg, resolve_col(sort_col)))
+                                order_by_tuples.append((raw(f"{window_expr.to_sql()} OVER __WINDOW_{gidx}__"), SortDir.DESC if sort_dir == "desc" else SortDir.ASC))
 
-                    yield f"__ROW_PATH_{gidx}__  ASC"
+                    order_by_tuples.append((col_ref(f"__ROW_PATH_{gidx}__"), SortDir.ASC))
             else:
                 for sort_col, sort_dir in sort:
-                    if sort_dir is not None:
-                        yield f"{col_name(sort_col)} {sort_dir}"
+                    if sort_dir:
+                        order_by_tuples.append((resolve_col(sort_col), SortDir.DESC if sort_dir == "desc" else SortDir.ASC))
 
-        def window_clause():
-            if len(config["sort"]) == 0:
-                return
+            window_clauses = []
+            if sort and group_by:
+                for gidx in range(len(group_by) - 1):
+                    partitions = [col_ref(f"__ROW_PATH_{i}__") for i in range(gidx + 1)]
+                    sub_groups = [resolve_col(g) for g in group_by[: (gidx + 1)]]
+                    groups_order = [order_by(resolve_col(g)) for g in group_by]
+                    window_clauses.append(window(
+                        col_ref(f"__WINDOW_{gidx}__"),
+                        partition_by=[func("GROUPING_ID", *sub_groups), *partitions],
+                        order_by=groups_order
+                    ))
 
-            for gidx in range(len(group_by) - 1):
-                partition = ", ".join(f"__ROW_PATH_{i}__" for i in range(gidx + 1))
-                sub_groups = ", ".join(col_name(g) for g in group_by[: (gidx + 1)])
-                groups = ", ".join(col_name(g) for g in group_by)
-                yield f"""
-                    __WINDOW_{gidx}__ AS (
-                        PARTITION BY
-                            GROUPING_ID({sub_groups}),
-                            {partition}
-                        ORDER BY
-                            {groups}
-                )"""
-
-        def where_clause():
-            for name, op, value in config["filter"]:
-                if value is not None:
-                    term_lit = f"'{value}'" if isinstance(value, str) else str(value)
-                    yield f"{col_name(name)} {op} {term_lit}"
-
-        def build_cte():
-            if not has_custom_aggs or len(group_by) == 0:
-                return None
-
-            cte_parts = []
-            for col, agg_name in columns_with_custom_aggs.items():
-                custom_agg = self.custom_aggregates[agg_name]
-                cte_parts.append(custom_agg.build_cte(col, col_name, group_by, table_name))
-
-            return "WITH " + ",\n".join(cte_parts) if cte_parts else None
-
-        def build_custom_select(col_name_fn=None):
-            if not has_custom_aggs or len(group_by) == 0:
-                return None
-
-            if col_name_fn is None:
-                col_name_fn = col_name
-
-            custom_selects = []
-            for col, agg_name in columns_with_custom_aggs.items():
-                custom_agg = self.custom_aggregates[agg_name]
-                custom_selects.append(custom_agg.build_select(col, col_name_fn, group_by))
-            return custom_selects
-
-        if has_custom_aggs and len(group_by) > 0 and len(split_by) == 0:
-            cte = build_cte()
-
-            # Check if we have mixed custom/primitive aggregates (will need JOIN)
-            has_non_custom_cols = any(col not in columns_with_custom_aggs for col in columns)
-
-            custom_selects = build_custom_select()
-
-            if cte and custom_selects:
-                groups = ", ".join(col_name(x) for x in group_by)
-                first_col = next(iter(columns_with_custom_aggs))
-                first_agg = self.custom_aggregates[columns_with_custom_aggs[first_col]]
-                cte_name = f"{first_col}_{first_agg.cte_suffix}"
-
-                cte_names = {}
-                for col, agg_name in columns_with_custom_aggs.items():
-                    custom_agg = self.custom_aggregates[agg_name]
-                    cte_names[col] = f"{col}_{custom_agg.cte_suffix}"
-
-                final_selects = []
-                for col in columns:
-                    if col in columns_with_custom_aggs:
-                        final_selects.append(custom_selects.pop(0) if custom_selects else "")
-                    else:
-                        final_selects.append(f'{aggregates.get(col)}({col_name(col)}) as "{col}"')
-
-                final_selects.extend(f"{col_name(group)} as __ROW_PATH_{idx}__" for idx, group in enumerate(group_by))
-                final_selects.append(f"GROUPING_ID({groups}) AS __GROUPING_ID__")
-
-                where_parts = list(where_clause())
-                where_str = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
-
-                if has_non_custom_cols:
-                    def cte_qualified_col_name(col):
-                        expr = config["expressions"].get(col)
-                        if expr:
-                            return expr
-                        return f'{cte_name}."{col}"'
-
-                    custom_selects_fresh = build_custom_select(cte_qualified_col_name)
-
-                    normal_agg_cte = f"{cte_name}_normal"
-                    normal_selects = []
-                    for col in columns:
-                        if col not in columns_with_custom_aggs:
-                            agg = aggregates.get(col)
-                            if agg == "avg":
-                                normal_selects.append(f'sum({col_name(col)}) as "{col}__sum"')
-                                normal_selects.append(f'count({col_name(col)}) as "{col}__count"')
-                            else:
-                                normal_selects.append(f'{agg}({col_name(col)}) as "{col}"')
-
-                    normal_agg_query = f"""
-                    ,
-                    {normal_agg_cte} AS (
-                        SELECT
-                            {", ".join(col_name(g) for g in group_by)},
-                            {", ".join(normal_selects)}
-                        FROM {table_name}
-                        {where_str}
-                        GROUP BY {", ".join(col_name(g) for g in group_by)}
-                    )
-                    """
-
-                    join_conditions = " AND ".join(
-                        f"{cte_name}.{col_name(g)} = {normal_agg_cte}.{col_name(g)}"
-                        for g in group_by
-                    )
-
-                    final_selects_joined = []
-                    for col in columns:
-                        if col in columns_with_custom_aggs:
-                            final_selects_joined.append(custom_selects_fresh.pop(0))
-                        else:
-                            agg_func = aggregates.get(col)
-                            if agg_func == "avg":
-                                final_selects_joined.append(
-                                    f'sum({normal_agg_cte}."{col}__sum") / sum({normal_agg_cte}."{col}__count") as "{col}"'
-                                )
-                            else:
-                                # Map basic aggregates to rollup equivalents
-                                rollup_agg_map = {"count": "sum"}
-                                rollup_agg = rollup_agg_map.get(agg_func, agg_func)
-                                final_selects_joined.append(f'{rollup_agg}({normal_agg_cte}."{col}") as "{col}"')
-
-                    final_selects_joined.extend(f"{cte_name}.{col_name(group)} as __ROW_PATH_{idx}__" for idx, group in enumerate(group_by))
-                    final_selects_joined.append(f"GROUPING_ID({', '.join(f'{cte_name}.{col_name(g)}' for g in group_by)}) AS __GROUPING_ID__")
-
-                    # Build ORDER BY with CTE-qualified names
-                    order_by_parts = []
-                    for gidx in range(len(group_by)):
-                        groups_prefixed = ", ".join(f'{cte_name}.{col_name(g)}' for g in group_by[: (gidx + 1)])
-                        order_by_parts.append(f"GROUPING_ID({groups_prefixed}) DESC")
-
-                        for sort_col, sort_dir in sort:
-                            if sort_dir != "none" and gidx >= len(group_by) - 1:
-                                # Reference the computed column directly
-                                order_by_parts.append(f'"{sort_col}" {sort_dir}')
-
-                        order_by_parts.append(f"__ROW_PATH_{gidx}__ ASC")
-
-                    order_str = f"ORDER BY {', '.join(order_by_parts)}" if order_by_parts else ""
-
-                    query = f"""
-                    {cte}
-                    {normal_agg_query}
-                    SELECT {", ".join(final_selects_joined)}
-                    FROM {cte_name}
-                    INNER JOIN {normal_agg_cte} ON {join_conditions}
-                    GROUP BY ROLLUP({", ".join(f'{cte_name}.{col_name(g)}' for g in group_by)})
-                    {order_str}
-                    """
-                else:
-                    if len(cte_names) > 1:
-                        custom_selects_joined = []
-                        cte_list = list(cte_names.values())
-                        first_cte = cte_list[0]
-
-                        def make_col_name_fn(target_col, target_cte):
-                            def col_name_fn(c):
-                                expr = config["expressions"].get(c)
-                                if expr:
-                                    return expr
-                                if c == target_col:
-                                    return f'{target_cte}."{c}"'
-                                return f'{first_cte}."{c}"'
-                            return col_name_fn
-
-                        for col, agg_name in columns_with_custom_aggs.items():
-                            custom_agg = self.custom_aggregates[agg_name]
-                            col_name_fn = make_col_name_fn(col, cte_names[col])
-                            custom_selects_joined.append(custom_agg.build_select(col, col_name_fn, group_by))
-
-                        join_clauses = []
-                        for other_cte in cte_list[1:]:
-                            join_conditions = " AND ".join(
-                                f"{first_cte}.{col_name(g)} = {other_cte}.{col_name(g)}"
-                                for g in group_by
-                            )
-                            join_clauses.append(f"INNER JOIN {other_cte} ON {join_conditions}")
-
-                        final_selects_joined = custom_selects_joined.copy()
-                        final_selects_joined.extend(f"{first_cte}.{col_name(group)} as __ROW_PATH_{idx}__" for idx, group in enumerate(group_by))
-                        final_selects_joined.append(f"GROUPING_ID({', '.join(f'{first_cte}.{col_name(g)}' for g in group_by)}) AS __GROUPING_ID__")
-
-                        order_by_parts = []
-                        for gidx in range(len(group_by)):
-                            groups_prefixed = ", ".join(f'{first_cte}.{col_name(g)}' for g in group_by[: (gidx + 1)])
-                            order_by_parts.append(f"GROUPING_ID({groups_prefixed}) DESC")
-
-                            for sort_col, sort_dir in sort:
-                                if sort_dir != "none" and gidx >= len(group_by) - 1:
-                                    order_by_parts.append(f'"{sort_col}" {sort_dir}')
-
-                            order_by_parts.append(f"__ROW_PATH_{gidx}__ ASC")
-
-                        order_str = f"ORDER BY {', '.join(order_by_parts)}" if order_by_parts else ""
-
-                        query = f"""
-                        {cte}
-                        SELECT {", ".join(final_selects_joined)}
-                        FROM {first_cte}
-                        {" ".join(join_clauses)}
-                        GROUP BY ROLLUP({", ".join(f'{first_cte}.{col_name(g)}' for g in group_by)})
-                        {order_str}
-                        """
-                    else:
-                        # Single custom CTE - no join needed
-                        order_by_parts = []
-                        for gidx in range(len(group_by)):
-                            groups_prefixed = ", ".join(col_name(g) for g in group_by[: (gidx + 1)])
-                            order_by_parts.append(f"GROUPING_ID({groups_prefixed}) DESC")
-
-                            for sort_col, sort_dir in sort:
-                                if sort_dir != "none" and gidx >= len(group_by) - 1:
-                                    order_by_parts.append(f'"{sort_col}" {sort_dir}')
-
-                            order_by_parts.append(f"__ROW_PATH_{gidx}__ ASC")
-
-                        order_str = f"ORDER BY {', '.join(order_by_parts)}" if order_by_parts else ""
-
-                        query = f"""
-                        {cte}
-                        SELECT {", ".join(final_selects)}
-                        FROM {cte_name}
-                        {where_str}
-                        GROUP BY ROLLUP({groups})
-                        {order_str}
-                        """
-
-                run_query(self.db, f"CREATE TEMPORARY TABLE {view_name} AS ({query})", execute=True)
-                return
-
-        query = f"SELECT * FROM {table_name}" if split_by else f"SELECT {', '.join(select_clause())} FROM {table_name}"
-
-        if where := list(where_clause()):
-            query = f"{query} WHERE {' AND '.join(where)}"
-
-        if split_by:
-            groups = ", ".join(col_name(x) for x in group_by)
-            group_aliases = ", ".join(f"{col_name(x)} AS __ROW_PATH_{i}__" for i, x in enumerate(group_by))
-
-            query = f"""
-            SELECT * EXCLUDE ({groups}), {group_aliases} FROM (
-                PIVOT ({query})
-                ON {", ".join(f'"{c}"' for c in split_by)}
-                USING {", ".join(select_clause())}
-                GROUP BY {groups}
+            query_obj = Select(
+                columns=select_cols,
+                from_table=table_name,
+                where=where_exprs or None,
+                group_by=[resolve_col(g) for g in group_by] if group_by else None,
+                group_by_rollup=bool(group_by),
+                order_by=order_by_tuples or None,
+                window=window_clauses or None,
             )
-            """
-        elif group_by:
-            query = f"{query} GROUP BY ROLLUP({', '.join(col_name(x) for x in group_by)})"
 
-        if window := list(window_clause()):
-            query = f"{query} WINDOW {', '.join(window)}"
+            run_query(self.db, create_table(view_name, query_obj, temporary=True).to_sql(), execute=True)
 
-        if order_by := list(order_by_clause()):
-            query = f"{query} ORDER BY {', '.join(order_by)}"
+    def _build_custom_agg_query(self, table_name, columns, group_by, columns_with_custom_aggs,
+                                aggregates, where_clause, resolve_col, sort):
+        def build_rollup_order_by(table_ref: TableRef = None):
+            for gidx in range(len(group_by)):
+                group_slice = [resolve_col(g, table_ref) for g in group_by[: (gidx + 1)]]
+                yield (func("GROUPING_ID", *group_slice), SortDir.DESC)
+                for sort_col, sort_dir in sort:
+                    if sort_dir != "none" and gidx >= len(group_by) - 1:
+                        yield (col_ref(sort_col), SortDir.DESC if sort_dir == "desc" else SortDir.ASC)
+                yield (col_ref(f"__ROW_PATH_{gidx}__"), SortDir.ASC)
 
-        run_query(self.db, f"CREATE TEMPORARY TABLE {view_name} AS ({query})", execute=True)
+        def add_metadata_columns(cols, table_ref):
+            for i, g in enumerate(group_by):
+                cols.append(select_col(table_ref.col(g), f"__ROW_PATH_{i}__"))
+            cols.append(select_col(func("GROUPING_ID", *[table_ref.col(g) for g in group_by]), "__GROUPING_ID__"))
+
+        def build_join_conditions(left_table, right_table):
+            conditions = [left_table.col(g).eq(right_table.col(g)) for g in group_by]
+            result = conditions[0]
+            for cond in conditions[1:]:
+                result = BinaryOp(result, BinaryOperator.AND, cond)
+            return result
+
+        ctes = []
+        for col_name, agg_name in columns_with_custom_aggs.items():
+            custom_agg = self.custom_aggregates[agg_name]
+            cte_name = f"{col_name}_{custom_agg.cte_suffix}"
+            ctes.extend(custom_agg.build_cte(
+                cte_name,
+                resolve_col(col_name),
+                [resolve_col(g) for g in group_by],
+                tableref(table_name)
+            ))
+
+        cte_map = {col: tableref(f"{col}_{self.custom_aggregates[agg].cte_suffix}")
+                   for col, agg in columns_with_custom_aggs.items()}
+        first_cte = next(iter(cte_map.values()))
+        has_normal_aggs = any(col not in columns_with_custom_aggs for col in columns)
+
+        if has_normal_aggs:
+            where_exprs = list(where_clause())
+            normal_cte_name = f"{first_cte.name}_normal"
+            normal_cols = [select_col(resolve_col(g)) for g in group_by]
+            for col in columns:
+                if col not in columns_with_custom_aggs:
+                    agg = aggregates.get(col)
+                    if agg == "avg":
+                        normal_cols.append(select_col(func("sum", resolve_col(col)), f"{col}__sum"))
+                        normal_cols.append(select_col(func("count", resolve_col(col)), f"{col}__count"))
+                    else:
+                        normal_cols.append(select_col(func(agg, resolve_col(col)), col))
+
+            ctes.append(make_cte(normal_cte_name, normal_cols, table_name,
+                                 where=where_exprs or None, group_by=[resolve_col(g) for g in group_by]))
+
+            final_cols = []
+            for col in columns:
+                if col in columns_with_custom_aggs:
+                    custom_agg = self.custom_aggregates[columns_with_custom_aggs[col]]
+                    cte_table = cte_map[col]
+                    final_cols.append(custom_agg.build_select(
+                        cte_table, cte_table.col(col), [first_cte.col(g) for g in group_by]
+                    ))
+                else:
+                    agg = aggregates.get(col)
+                    normal_table = tableref(normal_cte_name)
+                    if agg == "avg":
+                        final_cols.append(select_col(
+                            BinaryOp(func("sum", normal_table.col(f"{col}__sum")),
+                                   BinaryOperator.DIV,
+                                   func("count", normal_table.col(f"{col}__count"))), col))
+                    else:
+                        rollup_agg = "sum" if agg == "count" else agg
+                        final_cols.append(select_col(func(rollup_agg, normal_table.col(col)), col))
+
+            add_metadata_columns(final_cols, first_cte)
+            joins = [make_join(normal_cte_name, build_join_conditions(first_cte, tableref(normal_cte_name)), JoinType.INNER)]
+            select_obj = Select(
+                columns=final_cols,
+                from_table=first_cte.name,
+                joins=joins,
+                group_by=[first_cte.col(g) for g in group_by],
+                group_by_rollup=True,
+                order_by=list(build_rollup_order_by(first_cte)) or None
+            )
+
+        elif len(cte_map) > 1:
+            final_cols = []
+            for col, agg_name in columns_with_custom_aggs.items():
+                custom_agg = self.custom_aggregates[agg_name]
+                cte_table = cte_map[col]
+                final_cols.append(custom_agg.build_select(
+                    cte_table, cte_table.col(col), [first_cte.col(g) for g in group_by]
+                ))
+
+            add_metadata_columns(final_cols, first_cte)
+            joins = [make_join(cte.name, build_join_conditions(first_cte, cte), JoinType.INNER)
+                     for cte in list(cte_map.values())[1:]]
+            select_obj = Select(
+                columns=final_cols,
+                from_table=first_cte.name,
+                joins=joins,
+                group_by=[first_cte.col(g) for g in group_by],
+                group_by_rollup=True,
+                order_by=list(build_rollup_order_by(first_cte)) or None
+            )
+
+        else:
+            where_exprs = list(where_clause())
+            final_cols = []
+            for col in columns:
+                if col in columns_with_custom_aggs:
+                    custom_agg = self.custom_aggregates[columns_with_custom_aggs[col]]
+                    final_cols.append(custom_agg.build_select(
+                        first_cte, resolve_col(col), [resolve_col(g) for g in group_by]
+                    ))
+                else:
+                    final_cols.append(select_col(func(aggregates.get(col), resolve_col(col)), col))
+
+            for idx, g in enumerate(group_by):
+                final_cols.append(select_col(resolve_col(g), f"__ROW_PATH_{idx}__"))
+            final_cols.append(select_col(func("GROUPING_ID", *[resolve_col(g) for g in group_by]), "__GROUPING_ID__"))
+
+            select_obj = Select(
+                columns=final_cols,
+                from_table=first_cte.name,
+                where=where_exprs or None,
+                group_by=[resolve_col(g) for g in group_by],
+                group_by_rollup=True,
+                order_by=list(build_rollup_order_by()) or None
+            )
+
+        return query_with_ctes(ctes, select_obj).to_sql()
 
     def table_validate_expression(self, view_name, expression):
-        query = f"DESCRIBE (select {expression} from {view_name})"
+        select_query = Select(
+            columns=[raw(expression)],
+            from_table=view_name
+        )
+        query = describe(select_query).to_sql()
         results = run_query(self.db, query)
         return duckdb_type_to_psp(results[0][1])
 
     def view_delete(self, view_name):
-        query = f"DROP TABLE {view_name}"
+        query = drop_table(view_name).to_sql()
         run_query(self.db, query, execute=True)
 
     def view_get_data(self, view_name, config, viewport, data):
@@ -618,23 +548,21 @@ class DuckDBVirtualSessionModel(VirtualSessionModel):
 #
 # DuckDB Utils
 
-
-def val_to_duckdb_lit(value):
-    """
-    Convert a Python value to a string representation of this values suitable
-    for SQL injecting.
-    """
-    if isinstance(value, str):
-        return f"'{value}'"
-    return str(value)
-
-
-def sort_to_duckdb_sort(sortdir):
-    if sortdir == "asc":
-        return "ASC"
-    if sortdir == "desc":
-        return "DESC"
-    return "DESC"
+def str_to_operator(op_str: str) -> BinaryOperator:
+    op_map = {
+        "==": BinaryOperator.EQ,
+        "!=": BinaryOperator.NE,
+        "<": BinaryOperator.LT,
+        "<=": BinaryOperator.LE,
+        ">": BinaryOperator.GT,
+        ">=": BinaryOperator.GE,
+        "LIKE": BinaryOperator.LIKE,
+        "IS DISTINCT FROM": BinaryOperator.IS_DISTINCT_FROM,
+        "IS NOT DISTINCT FROM": BinaryOperator.IS_NOT_DISTINCT_FROM,
+    }
+    if op_str not in op_map:
+        raise ValueError(f"Unknown operator: {op_str}")
+    return op_map[op_str]
 
 
 def duckdb_type_to_psp(name):

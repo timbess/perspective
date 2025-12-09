@@ -26,6 +26,10 @@ import tornado.web
 
 from loguru import logger
 from perspective.virtual_servers.duckdb import CustomAggregate, CustomAggregateType
+from perspective.virtual_servers.sql_builder import (
+    CTE, grouping, max_, order_by, raw, sum_, eq, case, when,
+    select_col, window, row_number, abs_, tableref, lit
+)
 from tornado.web import StaticFileHandler
 
 
@@ -37,7 +41,7 @@ INPUT_FILE = (
 )
 
 db = duckdb.connect(":memory:perspective")
-table = {
+table_data = {
     "division": [
         "D1", "D2", "D1", "D2", "D1",
         "D2", "D1", "D2", "D1", "D2",
@@ -70,7 +74,7 @@ table = {
     ]
 }
 
-rows = [reduce(lambda acc, col_name: {**acc, col_name: table[col_name][i]}, table.keys(), {}) for i in range(len(table["division"]))]
+rows = [reduce(lambda acc, col_name: {**acc, col_name: table_data[col_name][i]}, table_data.keys(), {}) for i in range(len(table_data["division"]))]
 
 
 with open("test.json", 'w') as f:
@@ -79,186 +83,171 @@ with open("test.json", 'w') as f:
 _ =db.read_json("test.json")
 
 class GmvAggregate(CustomAggregate):
-    @property
-    def underlying_type(self) -> CustomAggregateType:
-        return CustomAggregateType.NUMBER
+    def __init__(self):
+        super().__init__(CustomAggregateType.NUMBER, "sums")
 
-    @property
-    def cte_suffix(self) -> str:
-        return "sums"
-
-    def build_cte(self, col, col_name_fn, group_by, table_name):
-        """Build the CTE that pre-calculates needed values."""
-        groups = ", ".join(col_name_fn(g) for g in group_by)
+    @override
+    def build_cte(self, cte_name, col, group_by, table):
         n = len(group_by)
+        columns = []
+        for g in group_by:
+            columns.append(select_col(g))
+
+        columns.append(select_col(sum_(col), f"{col.name}_sum"))
 
         if n == 1:
-            # Simple case: just one grouping level
-            return f"""
-            {col}_{self.cte_suffix} AS (
-                SELECT
-                    {groups},
-                    sum({col_name_fn(col)}) AS {col}_{self.cte_suffix}
-                FROM {table_name}
-                GROUP BY {groups}
-            )
-            """
-        else:
-            group_list = [col_name_fn(g) for g in group_by]
+            return [CTE(cte_name, columns, table.name, group_by=group_by)]
 
-            window_funcs = []
-            row_num_partitions = []
+        for k in range(n - 1, 0, -1):
+            if k == n:
+                partition_cols = [group_by[-1]]
+                total_name = f"{col.name}_total_across_{group_by[0].name}"
+            else:
+                num_groups = n - k
+                partition_cols = group_by[:num_groups] + [group_by[-1]]
+                total_name = f"{col.name}_total_at_level_{k}"
 
-            for k in range(n - 1, 0, -1):
-                if k == n:
-                    # Total row: partition by last group only
-                    partition_cols = [group_list[-1]]
-                    total_name = f"{col}_total_across_{group_by[0]}"
-                else:
-                    # Intermediate rollup: partition by first (n-k) groups + last group
-                    num_groups = n - k
-                    partition_cols = group_list[:num_groups] + [group_list[-1]]
-                    total_name = f"{col}_total_at_level_{k}"
+            columns.append(select_col(
+                window(sum_(sum_(col)), partition_by=partition_cols),
+                total_name
+            ))
+            columns.append(select_col(
+                window(row_number(), partition_by=partition_cols, order_by=[order_by(group_by[0])]),
+                f"{total_name}_row_num"
+            ))
 
-                partition_by = ", ".join(partition_cols)
-                window_funcs.append(
-                    f"sum(sum({col_name_fn(col)})) OVER (PARTITION BY {partition_by}) AS {total_name}"
-                )
-                row_num_partitions.append(
-                    f"ROW_NUMBER() OVER (PARTITION BY {partition_by} ORDER BY {group_list[0]}) AS {total_name}_row_num"
-                )
+        columns.append(select_col(
+            window(sum_(sum_(col)), partition_by=[group_by[-1]]),
+            f"{col.name}_total_across_all"
+        ))
+        columns.append(select_col(
+            window(row_number(), partition_by=[group_by[-1]], order_by=[order_by(group_by[0])]),
+            f"{col.name}_total_across_all_row_num"
+        ))
 
-            # Add total across everything (for grand total)
-            window_funcs.append(
-                f"sum(sum({col_name_fn(col)})) OVER (PARTITION BY {group_list[-1]}) AS {col}_total_across_all"
-            )
-            row_num_partitions.append(
-                f"ROW_NUMBER() OVER (PARTITION BY {group_list[-1]} ORDER BY {group_list[0]}) AS {col}_total_across_all_row_num"
-            )
+        return [CTE(cte_name, columns, table.name, group_by=group_by)]
 
-            return f"""
-            {col}_{self.cte_suffix} AS (
-                SELECT
-                    {groups},
-                    sum({col_name_fn(col)}) AS {col}_sum,
-                    {", ".join(window_funcs)},
-                    {", ".join(row_num_partitions)}
-                FROM {table_name}
-                GROUP BY {groups}
-            )
-            """
-
-    def build_select(self, col, col_name_fn, group_by):
-        """Build the SELECT expression with CASE logic for different grouping levels.
-
-        Generates a separate CASE branch for each rollup level:
-        - Total row: Deduplicate using total_across_all
-        - Each intermediate rollup: Deduplicate using total_at_level_k
-        - Leaf level: Raw sum
-        """
-        groups = ", ".join(col_name_fn(g) for g in group_by)
+    @override
+    def build_select(self, cte_table, col, group_by):
         n = len(group_by)
-
         if n == 1:
-            return f"""CASE
-                WHEN GROUPING({groups}) = 1 THEN SUM(ABS({col}_sum))
-                ELSE SUM({col}_sum)
-            END AS "{col}" """
+            case_expr = case(
+                when(
+                    eq(grouping(group_by[0]), 1),
+                    sum_(abs_(cte_table.col(f"{col.name}_sum")))
+                ),
+                else_clause=sum_(cte_table.col(f"{col.name}_sum"))
+            )
+            return select_col(case_expr, col.name)
         else:
-            # For ROLLUP(a, b, c), GROUPING_ID values are:
-            #   - 7 (111): total - all grouped
-            #   - 3 (011): GROUP BY a - b,c grouped
-            #   - 1 (001): GROUP BY a,b - c grouped
-            #   - 0 (000): GROUP BY a,b,c - leaf
+            when_clauses = []
 
-            case_branches = []
-
-            # Total row: GROUPING_ID = 2^n - 1
             total_grouping_id = 2**n - 1
-            case_branches.append(
-                f"WHEN GROUPING({groups}) = {total_grouping_id} THEN "
-                f"SUM(CASE WHEN {col}_total_across_all_row_num = 1 THEN ABS({col}_total_across_all) ELSE 0 END)"
-            )
+            when_clauses.append(when(
+                eq(grouping(*group_by), total_grouping_id),
+                sum_(case(
+                    when(cte_table.col(f"{col.name}_total_across_all_row_num").eq(1), abs_(cte_table.col(f"{col.name}_total_across_all"))),
+                    else_clause=lit(0)
+                ))
+            ))
 
-            # Intermediate rollup levels: GROUPING_ID = 2^k - 1 for k = n-1, n-2, ..., 1
-            # Each intermediate level uses its pre-computed total with deduplication
             for k in range(n - 1, 0, -1):
                 grouping_id = 2**k - 1
-                total_name = f"{col}_total_at_level_{k}"
+                total_name = f"{col.name}_total_at_level_{k}"
                 row_num_name = f"{total_name}_row_num"
-                case_branches.append(
-                    f"WHEN GROUPING({groups}) = {grouping_id} THEN "
-                    f"SUM(CASE WHEN {row_num_name} = 1 THEN ABS({total_name}) ELSE 0 END)"
-                )
+                when_clauses.append(when(
+                    eq(grouping(*group_by), grouping_id),
+                    sum_(case(
+                        when(cte_table.col(row_num_name).eq(1), abs_(cte_table.col(total_name))),
+                        else_clause=lit(0)
+                    ))
+                ))
 
-            # Leaf level: GROUPING_ID = 0
-            case_branches.append(f"ELSE SUM({col}_sum)")
+            case_expr = case(*when_clauses, else_clause=sum_(cte_table.col(f"{col.name}_sum")))
+            return select_col(case_expr, col.name)
 
-            case_statement = "CASE\n                " + "\n                ".join(case_branches) + "\n            END"
-            return f"""{case_statement} AS "{col}" """
-
-# Honestly no idea if this is right, but it's mostly to show two custom aggregates working together.
 class CumulativeSumAggregate(CustomAggregate):
-    @property
-    def underlying_type(self) -> CustomAggregateType:
-        return CustomAggregateType.NUMBER
+    def __init__(self):
+        super().__init__(CustomAggregateType.NUMBER, "cumsum")
 
-    @property
-    def cte_suffix(self) -> str:
-        return "cumsum"
+    @override
+    def build_cte(self, cte_name, col, group_by, table):
+        group_by = group_by
+        group_cols = [select_col(g) for g in group_by]
+        base_table = tableref(f"{cte_name}_base")
+        final_table = tableref(cte_name)
 
-    def build_cte(self, col, col_name_fn, group_by, table_name):
-        groups = ", ".join(col_name_fn(g) for g in group_by)
+        if len(group_by) == 1:
+            base_cte = CTE(
+                base_table.name,
+                group_cols + [select_col(
+                    window(
+                        sum_(col),
+                        partition_by=group_by,
+                        order_by=[order_by(raw("ROWID"))],
+                        frame="ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW"
+                    ),
+                    f"{col.name}_raw"
+                )],
+                table.name
+            )
+
+            final_cte = CTE(
+                final_table.name,
+                group_cols + [select_col(max_(base_table.col(f"{col.name}_raw")), final_table.name)],
+                base_table.name,
+                group_by=group_by
+            )
+        else:
+            base_cte = CTE(
+                base_table.name,
+                group_cols + [select_col(sum_(col), f"{col.name}_sum")],
+                table.name,
+                group_by=group_by
+            )
+
+            partition_by = group_by[:-1] if len(group_by) > 1 else group_by
+            final_cte = CTE(
+                final_table.name,
+                group_cols + [
+                    select_col(
+                        window(
+                            sum_(base_table.col(f"{col.name}_sum")),
+                            partition_by=partition_by,
+                            order_by=[order_by(group_by[-1])],
+                            frame="ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW"
+                        ),
+                        f"{col.name}_cumsum"
+                    ),
+                    select_col(base_table.col(f"{col.name}_sum"))
+                ],
+                base_table.name
+            )
+
+        return [base_cte, final_cte]
+
+    @override
+    def build_select(self, cte_table, col, group_by):
         n = len(group_by)
 
         if n == 1:
-            # Simple case: cumulative sum within each group
-            return f"""
-            {col}_{self.cte_suffix} AS (
-                SELECT
-                    {groups},
-                    SUM({col_name_fn(col)}) OVER (PARTITION BY {groups} ORDER BY ROWID ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS {col}_{self.cte_suffix}
-                FROM {table_name}
+            case_expr = case(
+                when(
+                    raw(f"GROUPING({group_by[0].to_sql()}) = 1"),
+                    sum_(cte_table.col(f"{col.name}_cumsum"))
+                ),
+                else_clause=max_(cte_table.col(f"{col.name}_cumsum"))
             )
-            """
+            return select_col(case_expr, col.name)
         else:
-            # Multiple grouping levels - compute cumulative sum for leaf level
-            group_list = [col_name_fn(g) for g in group_by]
-            partition_by = ", ".join(group_list[:-1]) if len(group_list) > 1 else group_list[0]
-
-            return f"""
-            {col}_{self.cte_suffix}_base AS (
-                SELECT
-                    {groups},
-                    SUM({col_name_fn(col)}) AS {col}_sum
-                FROM {table_name}
-                GROUP BY {groups}
-            ),
-            {col}_{self.cte_suffix} AS (
-                SELECT
-                    {groups},
-                    SUM({col}_sum) OVER (PARTITION BY {partition_by} ORDER BY {group_list[-1]} ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS {col}_cumsum,
-                    {col}_sum
-                FROM {col}_{self.cte_suffix}_base
+            case_expr = case(
+                when(
+                    raw(f"GROUPING({', '.join(e.to_sql() for e in group_by)}) = 0"),
+                    max_(cte_table.col(f"{col.name}_cumsum"))
+                ),
+                else_clause=sum_(cte_table.col(f"{col.name}_cumsum"))
             )
-            """
-
-    def build_select(self, col, col_name_fn, group_by):
-        groups = ", ".join(col_name_fn(g) for g in group_by)
-        n = len(group_by)
-
-        if n == 1:
-            # Simple case
-            return f"""CASE
-                WHEN GROUPING({groups}) = 1 THEN SUM({col}_cumsum)
-                ELSE MAX({col}_cumsum)
-            END AS "{col}" """
-        else:
-            # Use cumsum at leaf, sum at higher levels
-            return f"""CASE
-                WHEN GROUPING({groups}) = 0 THEN MAX({col}_cumsum)
-                ELSE SUM({col}_cumsum)
-            END AS "{col}" """
+            return select_col(case_expr, col.name)
 
 
 def main():
